@@ -4,39 +4,60 @@ import subprocess
 
 class Kill(kp.Plugin):
     """
-        Plugin that lists running processes with name and commandline if
-        available and kills the select process with
-        'taskkill.exe /F /IM <selected process exe>'
+        Plugin that lists running processes with name and commandline (if
+        available) and kills the select process
     """
 
     def __init__(self):
+        """
+            Default constructor and initializing internal attributes
+        """
         super().__init__()
         self._processes = []
         self._actions = []
+        self._default_action = "kill_by_name"
         # self._debug = True
+
+    def on_config_changed(self, flags):
+        """
+            Reloads the package config when its changed
+        """
+        if flags & kp.ConfChangedFlags.PACKAGE:
+            self._read_config()
+
+    def _read_config(self):
+        """
+            Reads the default action from the config
+        """
+        settings = self.load_settings()
+        self._default_action = settings.get("default_action", "main", "kill_by_name")
 
     def on_start(self):
         """
             Creates the actions for killing the processes and register them
         """
+        self._read_config()
         kill_by_name = self.create_action(
             name="kill_by_name",
             label="Kill all processes",
             short_desc="Kill by Name (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name)
+
         kill_by_id = self.create_action(
             name="kill_by_id",
             label="Kill single process",
             short_desc="Kill by PID (taskkill /F /PID <pid>)"
         )
         self._actions.append(kill_by_id)
+
         kill_by_name_admin = self.create_action(
             name="kill_by_name_admin",
             label="Kill all processes (as Admin) -- NOT WORKING YET",
             short_desc="Kill by Name with elevated rights (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name_admin)
+
         kill_by_id_admin = self.create_action(
             name="kill_by_id_admin",
             label="Kill single process (as Admin) -- NOT WORKING YET",
@@ -69,7 +90,9 @@ class Kill(kp.Plugin):
         """
             Creates the list of running processes, when the Keypirinha Box is
             triggered
+            Uses Windows' "wmic.exe" tool to get the running processes
         """
+        # Using external call to wmic to get the list of running processes
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         output, err = subprocess.Popen(["wmic",
@@ -77,10 +100,10 @@ class Kill(kp.Plugin):
                                         "get",
                                         "ProcessId,Caption,Description,",
                                         "Name,ExecutablePath,CommandLine",
-                                        "/FORMAT:CSV"],
+                                        "/FORMAT:LIST"],
                                        stdout=subprocess.PIPE,
                                        startupinfo=startupinfo).communicate()
-
+        # log error if any
         if err:
             self.err(err)
 
@@ -93,40 +116,50 @@ class Kill(kp.Plugin):
             hit_hint=kp.ItemHitHint.IGNORE
         )
 
-        indexes = {}
-        header_read = False
-
+        # Parsing process list from output
+        prev_line_empty = False
+        item = None
+        info = {}
         for line in output.splitlines():
             if line.strip() == b"":
-                continue
-            if not header_read:
-                header = line.split(b",")
-                for idx, col in enumerate(header):
-                    if col == b"Node":
-                        continue
-                    else:
-                        indexes[col] = idx
-                header_read = True
+                # 2 empty line mean the process description is done
+                if prev_line_empty:
+                    # build catalog item with gathered information from parsing
+                    if item is not None and info:
+                        item.set_args(
+                            info[b"Name"].decode() + "|" + info[b"ProcessId"].decode(),
+                            info[b"Caption"].decode()
+                        )
+                        if info[b"CommandLine"]:
+                            item.set_short_desc(info[b"CommandLine"].decode())
+                        elif info[b"ExecutablePath"]:
+                            item.set_short_desc(info[b"ExecutablePath"].decode())
+                        elif info[b"Name"]:
+                            item.set_short_desc(info[b"Name"].decode())
+                        self._processes.append(item)
+                        item = None
+                        info = {}
+                    # initialize new item
+                    item = initial_item.clone()
+                prev_line_empty = True
             else:
-                if line[indexes[b"Caption"]] == b"System Idle Process" \
-                    or line[indexes[b"Caption"]] == b"System":
+                # Save key=value in info dict
+                prev_line_empty = False
+                line_splitted = line.split(b"=")
+                label = line_splitted[0]
+                value = b"=".join(line_splitted[1:])
+                # Skip system processes that cant be killed
+                if label == b"Caption" and (value == b"System Idle Process" or value == b"System"):
+                    item = None
+
+                if item is None:
                     continue
 
-                cols = line.split(b",")
-                item = initial_item.clone()
-                item.set_args(
-                    cols[indexes[b"Name"]].decode() + "|" + cols[indexes[b"ProcessId"]].decode(),
-                    cols[indexes[b"Caption"]].decode()
-                )
-                if cols[indexes[b"CommandLine"]]:
-                    item.set_short_desc(cols[indexes[b"CommandLine"]].decode())
-                elif cols[indexes[b"ExecutablePath"]]:
-                    item.set_short_desc(cols[indexes[b"ExecutablePath"]].decode())
-                elif cols[indexes[b"Name"]]:
-                    item.set_short_desc(cols[indexes[b"Name"]].decode())
-                self._processes.append(item)
+                info[label] = value
 
         self.dbg("%d running processes found" % len(self._processes))
+        # for prc in self._processes:
+        #     self.dbg(prc.raw_args())
 
     def on_deactivated(self):
         """
@@ -145,32 +178,33 @@ class Kill(kp.Plugin):
 
     def on_execute(self, item, action):
         """
-            Executes the taskkill with the selected item
+            Executes the taskkill with the selected item and action
         """
-        msg = 'On Execute "{}" (action: {})'.format(item, action)
-        self.dbg(msg)
 
         args = ["taskkill", "/F"]
-
-        default_action = "kill_by_name"
+        # get default action
         if action is None:
             for act in self._actions:
-                if act.name() == default_action:
+                if act.name() == self._default_action:
                     action = act
 
+        # add parameters according to action
         if "kill_by_name" in action.name():
             args.append("/IM")
+            # process name
             args.append(item.raw_args().split("|")[0])
         elif "kill_by_id" in action.name():
             args.append("/PID")
+            # process id
             args.append(item.raw_args().split("|")[1])
 
-        self.dbg(args)
+        self.dbg("Calling: %s" % args)
 
         # verb = ""
         # if "_admin" in action.name():
         #     verb = "runas"
 
+        # show no window when executing
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         subprocess.Popen(args, startupinfo=startupinfo).communicate()
