@@ -30,7 +30,20 @@ class Kill(kp.Plugin):
             Reads the default action from the config
         """
         settings = self.load_settings()
-        self._default_action = settings.get("default_action", "main", "kill_by_name")
+
+        possible_actions = [
+            "kill_by_name",
+            "kill_by_id",
+            "kill_by_name_admin",
+            "kill_by_id_admin"
+        ]
+
+        self._default_action = settings.get_enum(
+            "default_action",
+            "main",
+            "kill_by_name",
+            possible_actions
+        )
 
     def on_start(self):
         """
