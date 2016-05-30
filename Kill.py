@@ -18,11 +18,11 @@ class Kill(kp.Plugin):
         self._default_action = "kill_by_name"
         # self._debug = True
 
-    def on_config_changed(self, flags):
+    def on_events(self, flags):
         """
             Reloads the package config when its changed
         """
-        if flags & kp.ConfChangedFlags.PACKAGE:
+        if flags & kp.Events.PACKCONFIG:
             self._read_config()
 
     def _read_config(self):
