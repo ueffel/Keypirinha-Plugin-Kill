@@ -52,7 +52,7 @@ class Kill(kp.Plugin):
         self._read_config()
         kill_by_name = self.create_action(
             name="kill_by_name",
-            label="Kill all processes",
+            label="Kill all processes by that name",
             short_desc="Kill by Name (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name)
@@ -66,14 +66,14 @@ class Kill(kp.Plugin):
 
         kill_by_name_admin = self.create_action(
             name="kill_by_name_admin",
-            label="Kill all processes (as Admin) -- NOT WORKING YET",
+            label="Kill all processes by that name (as Admin)",
             short_desc="Kill by Name with elevated rights (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name_admin)
 
         kill_by_id_admin = self.create_action(
             name="kill_by_id_admin",
-            label="Kill single process (as Admin) -- NOT WORKING YET",
+            label="Kill single process (as Admin)",
             short_desc="Kill by PID with elevated rights (taskkill /F /PID <pid>)"
         )
         self._actions.append(kill_by_id_admin)
@@ -213,12 +213,9 @@ class Kill(kp.Plugin):
 
         self.dbg("Calling: %s" % args)
 
-        # verb = ""
-        # if "_admin" in action.name():
-        #     verb = "runas"
+        verb = ""
+        if "_admin" in action.name():
+            verb = "runas"
 
         # show no window when executing
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        subprocess.Popen(args, startupinfo=startupinfo).communicate()
-        # kpu.shell_execute(args[0], args[1:], verb=verb)
+        kpu.shell_execute(args[0], args[1:], verb=verb, show=subprocess.SW_HIDE)
