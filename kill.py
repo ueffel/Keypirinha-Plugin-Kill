@@ -180,11 +180,11 @@ class Kill(kp.Plugin):
         """
         self._processes = []
 
-    def on_suggest(self, user_input, initial_item=None, current_item=None):
+    def on_suggest(self, user_input, items_chain):
         """
             Sets the list of running processes as suggestions
         """
-        if not initial_item:
+        if not items_chain:
             return
 
         self.set_suggestions(self._processes, kp.Match.FUZZY, kp.Sort.SCORE_DESC)
