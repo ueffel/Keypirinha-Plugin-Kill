@@ -115,6 +115,8 @@ class Kill(kp.Plugin):
                                         "Name,ExecutablePath,CommandLine",
                                         "/FORMAT:LIST"],
                                        stdout=subprocess.PIPE,
+                                       universal_newlines=True,
+                                       shell=False,
                                        startupinfo=startupinfo).communicate()
         # log error if any
         if err:
@@ -134,21 +136,22 @@ class Kill(kp.Plugin):
         item = None
         info = {}
         for line in output.splitlines():
-            if line.strip() == b"":
+            # self.dbg(line)
+            if line.strip() == "":
                 # 2 empty line mean the process description is done
                 if prev_line_empty:
                     # build catalog item with gathered information from parsing
                     if item is not None and info:
                         item.set_args(
-                            info[b"Name"].decode() + "|" + info[b"ProcessId"].decode(),
-                            info[b"Caption"].decode()
+                            info["Name"] + "|" + info["ProcessId"],
+                            info["Caption"]
                         )
-                        if info[b"CommandLine"]:
-                            item.set_short_desc(info[b"CommandLine"].decode())
-                        elif info[b"ExecutablePath"]:
-                            item.set_short_desc(info[b"ExecutablePath"].decode())
-                        elif info[b"Name"]:
-                            item.set_short_desc(info[b"Name"].decode())
+                        if info["CommandLine"]:
+                            item.set_short_desc(info["CommandLine"])
+                        elif info["ExecutablePath"]:
+                            item.set_short_desc(info["ExecutablePath"])
+                        elif info["Name"]:
+                            item.set_short_desc(info["Name"])
                         self._processes.append(item)
                         item = None
                         info = {}
@@ -158,11 +161,11 @@ class Kill(kp.Plugin):
             else:
                 # Save key=value in info dict
                 prev_line_empty = False
-                line_splitted = line.split(b"=")
+                line_splitted = line.split("=")
                 label = line_splitted[0]
-                value = b"=".join(line_splitted[1:])
+                value = "=".join(line_splitted[1:])
                 # Skip system processes that cant be killed
-                if label == b"Caption" and (value == b"System Idle Process" or value == b"System"):
+                if label == "Caption" and (value == "System Idle Process" or value == "System"):
                     item = None
 
                 if item is None:
