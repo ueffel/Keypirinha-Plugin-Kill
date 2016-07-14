@@ -111,11 +111,11 @@ class Kill(kp.Plugin):
         output, err = subprocess.Popen(["wmic",
                                         "process",
                                         "get",
-                                        "ProcessId,Caption,Description,",
+                                        "ProcessId,Caption,",
                                         "Name,ExecutablePath,CommandLine",
                                         "/FORMAT:LIST"],
                                        stdout=subprocess.PIPE,
-                                       universal_newlines=True,
+                                       # universal_newlines=True,
                                        shell=False,
                                        startupinfo=startupinfo).communicate()
         # log error if any
@@ -132,6 +132,13 @@ class Kill(kp.Plugin):
         )
 
         # Parsing process list from output
+        for enc in ["cp437", "cp850", "cp1252", "utf8"]:
+            try:
+                output = output.decode(enc)
+                break
+            except UnicodeDecodeError:
+                self.dbg(enc + " threw exception")
+
         prev_line_empty = False
         item = None
         info = {}
