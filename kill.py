@@ -15,6 +15,7 @@ class Kill(kp.Plugin):
         super().__init__()
         self._processes = []
         self._actions = []
+        self._icons = {}
         self._default_action = "kill_by_name"
         # self._debug = True
 
@@ -99,6 +100,18 @@ class Kill(kp.Plugin):
 
         self.set_catalog(catalog)
 
+    def _get_icon(self, source):
+        if source in self._icons:
+            return self._icons[source]
+        else:
+            try:
+                icon = kp.load_icon("@" + source + ",0")
+                self._icons[source] = icon
+            except ValueError:
+                self.dbg("Icon loading failed :( %s" % source)
+                icon = None
+            return icon
+
     def on_activated(self):
         """
             Creates the list of running processes, when the Keypirinha Box is
@@ -122,65 +135,54 @@ class Kill(kp.Plugin):
         if err:
             self.err(err)
 
-        initial_item = self.create_item(
-            category=kp.ItemCategory.KEYWORD,
-            label="Kill:",
-            short_desc="Kills a processes",
-            target="kill",
-            args_hint=kp.ItemArgsHint.REQUIRED,
-            hit_hint=kp.ItemHitHint.IGNORE
-        )
-
         # Parsing process list from output
         for enc in ["cp437", "cp850", "cp1252", "utf8"]:
             try:
-                output = output.decode(enc)
+                output = output.replace(b"\r\r", b"\r")
+                outstr = output.decode(enc)
                 break
             except UnicodeDecodeError:
                 self.dbg(enc + " threw exception")
 
-        prev_line_empty = False
-        item = None
         info = {}
-        for line in output.splitlines():
+        for line in outstr.splitlines():
             # self.dbg(line)
             if line.strip() == "":
-                # 2 empty line mean the process description is done
-                if prev_line_empty:
-                    # build catalog item with gathered information from parsing
-                    if item is not None and info:
-                        item.set_args(
-                            info["Name"] + "|" + info["ProcessId"],
-                            info["Caption"]
-                        )
-                        if info["CommandLine"]:
-                            item.set_short_desc(info["CommandLine"])
-                        elif info["ExecutablePath"]:
-                            item.set_short_desc(info["ExecutablePath"])
-                        elif info["Name"]:
-                            item.set_short_desc(info["Name"])
-                        self._processes.append(item)
-                        item = None
-                        info = {}
-                    # initialize new item
-                    item = initial_item.clone()
-                prev_line_empty = True
+                # build catalog item with gathered information from parsing
+                if info and "Caption" in info:
+                    short_desc = ""
+
+                    if "CommandLine" in info and info["CommandLine"] != "":
+                        short_desc = info["CommandLine"]
+                    elif "ExecutablePath" in info and info["ExecutablePath"] != "":
+                        short_desc = info["ExecutablePath"]
+                    elif "Name" in info:
+                        short_desc = info["Name"]
+
+                    item = self.create_item(
+                        category=kp.ItemCategory.KEYWORD,
+                        label=info["Caption"],
+                        short_desc=short_desc,
+                        target=info["Name"] + "|" + info["ProcessId"],
+                        icon_handle=self._get_icon(info["ExecutablePath"]),
+                        args_hint=kp.ItemArgsHint.REQUIRED,
+                        hit_hint=kp.ItemHitHint.IGNORE
+                    )
+                    self._processes.append(item)
+                info = {}
             else:
                 # Save key=value in info dict
-                prev_line_empty = False
                 line_splitted = line.split("=")
                 label = line_splitted[0]
                 value = "=".join(line_splitted[1:])
                 # Skip system processes that cant be killed
                 if label == "Caption" and (value == "System Idle Process" or value == "System"):
-                    item = None
-
-                if item is None:
                     continue
-
                 info[label] = value
 
         self.dbg("%d running processes found" % len(self._processes))
+        self.dbg("%d icons loaded" % len(self._icons))
+        # self.dbg(self._icons)
         # for prc in self._processes:
         #     self.dbg(prc.raw_args())
 
@@ -189,6 +191,10 @@ class Kill(kp.Plugin):
             Emptys the process list, when Keypirinha Box is closed
         """
         self._processes = []
+        # for ico in self._icons.values():
+        #     ico.free()
+
+        # self._icons = {}
 
     def on_suggest(self, user_input, items_chain):
         """
