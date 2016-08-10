@@ -221,11 +221,11 @@ class Kill(kp.Plugin):
         if "kill_by_name" in action.name():
             args.append("/IM")
             # process name
-            args.append(item.raw_args().split("|")[0])
+            args.append(item.target().split("|")[0])
         elif "kill_by_id" in action.name():
             args.append("/PID")
             # process id
-            args.append(item.raw_args().split("|")[1])
+            args.append(item.target().split("|")[1])
 
         self.dbg("Calling: %s" % args)
 
