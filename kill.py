@@ -1,11 +1,14 @@
 import keypirinha as kp
 import keypirinha_util as kpu
-import subprocess
+import os
+from .lib import simpleprocess
+
+SW_HIDE = 0
 
 class Kill(kp.Plugin):
     """
         Plugin that lists running processes with name and commandline (if
-        available) and kills the select process
+        available) and kills the selected process(es)
     """
 
     def __init__(self):
@@ -16,8 +19,8 @@ class Kill(kp.Plugin):
         self._processes = []
         self._actions = []
         self._icons = {}
-        self._default_action = "kill_by_name"
-        # self._debug = True
+        self._default_action = "kill_by_id"
+        self._debug = True
 
     def on_events(self, flags):
         """
@@ -42,7 +45,7 @@ class Kill(kp.Plugin):
         self._default_action = settings.get_enum(
             "default_action",
             "main",
-            "kill_by_name",
+            self._default_action,
             possible_actions
         )
 
@@ -53,29 +56,29 @@ class Kill(kp.Plugin):
         self._read_config()
         kill_by_name = self.create_action(
             name="kill_by_name",
-            label="Kill all processes by that name",
-            short_desc="Kill by Name (taskkill /F /IM <exe>)"
+            label="Kill by Name",
+            short_desc="Kills all processes by that name"
         )
         self._actions.append(kill_by_name)
 
         kill_by_id = self.create_action(
             name="kill_by_id",
-            label="Kill single process",
-            short_desc="Kill by PID (taskkill /F /PID <pid>)"
+            label="Kill by PID",
+            short_desc="Kills single process by its process id"
         )
         self._actions.append(kill_by_id)
 
         kill_by_name_admin = self.create_action(
             name="kill_by_name_admin",
-            label="Kill all processes by that name (as Admin)",
-            short_desc="Kill by Name with elevated rights (taskkill /F /IM <exe>)"
+            label="Kill by Name (as Admin)",
+            short_desc="Kills all processes by that name with elevated rights (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name_admin)
 
         kill_by_id_admin = self.create_action(
             name="kill_by_id_admin",
-            label="Kill single process (as Admin)",
-            short_desc="Kill by PID with elevated rights (taskkill /F /PID <pid>)"
+            label="Kill by PID (as Admin)",
+            short_desc="Kills single process by its process id with elevated rights (taskkill /F /PID <pid>)"
         )
         self._actions.append(kill_by_id_admin)
 
@@ -101,14 +104,18 @@ class Kill(kp.Plugin):
         self.set_catalog(catalog)
 
     def _get_icon(self, source):
+        """
+            Tries to load the first icon within the source which should be a
+            path to an executable
+        """
         if source in self._icons:
             return self._icons[source]
         else:
             try:
-                icon = kp.load_icon("@" + source + ",0")
+                icon = self.load_icon("@{},0".format(source))
                 self._icons[source] = icon
             except ValueError:
-                self.dbg("Icon loading failed :( %s" % source)
+                self.dbg("Icon loading failed :( {}".format(source))
                 icon = None
             return icon
 
@@ -116,84 +123,50 @@ class Kill(kp.Plugin):
         """
             Creates the list of running processes, when the Keypirinha Box is
             triggered
-            Uses Windows' "wmic.exe" tool to get the running processes
+            Uses the windows api
         """
-        # Using external call to wmic to get the list of running processes
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        output, err = subprocess.Popen(["wmic",
-                                        "process",
-                                        "get",
-                                        "ProcessId,Caption,",
-                                        "Name,ExecutablePath,CommandLine",
-                                        "/FORMAT:LIST"],
-                                       stdout=subprocess.PIPE,
-                                       # universal_newlines=True,
-                                       shell=False,
-                                       startupinfo=startupinfo).communicate()
-        # log error if any
-        if err:
-            self.err(err)
+        pids = simpleprocess.getpids()
+        for (pid, name) in pids:
+            # Don't care about the system processes, they're not killable anyway
+            if pid == 0 or pid == 4:
+                continue
 
-        # Parsing process list from output
-        for enc in ["cp437", "cp850", "cp1252", "utf8"]:
+            proc = simpleprocess.Process(pid)
             try:
-                output = output.replace(b"\r\r", b"\r")
-                outstr = output.decode(enc)
-                break
-            except UnicodeDecodeError:
-                self.dbg(enc + " threw exception")
+                item = self.create_item(
+                    category=kp.ItemCategory.KEYWORD,
+                    label=name,
+                    short_desc="(pid: {}) {}".format(pid, proc.exe()), #" ".join(proc.cmdline())
+                    target="{}|{}".format(os.path.split(proc.exe())[1], str(pid)),
+                    icon_handle=self._get_icon(proc.exe()),
+                    args_hint=kp.ItemArgsHint.REQUIRED,
+                    hit_hint=kp.ItemHitHint.IGNORE
+                )
+                self._processes.append(item)
+                # self.dbg("Process added: {:13} {:5d} -> {}".format("normal", pid, name))
+            except simpleprocess.AccessDenied:
+                item = self.create_item(
+                    category=kp.ItemCategory.KEYWORD,
+                    label=name,
+                    short_desc="(pid: {}) Access Denied (probably only killable as Admin or not at all)".format(pid),
+                    target="{}|{}".format(name, str(pid)),
+                    icon_handle=None,
+                    args_hint=kp.ItemArgsHint.REQUIRED,
+                    hit_hint=kp.ItemHitHint.IGNORE
+                )
+                self._processes.append(item)
+                # self.dbg("Process added: {:13} {:5d} -> {}".format("access_denied", pid, name))
 
-        info = {}
-        for line in outstr.splitlines():
-            # self.dbg(line)
-            if line.strip() == "":
-                # build catalog item with gathered information from parsing
-                if info and "Caption" in info:
-                    short_desc = ""
-
-                    if "CommandLine" in info and info["CommandLine"] != "":
-                        short_desc = info["CommandLine"]
-                    elif "ExecutablePath" in info and info["ExecutablePath"] != "":
-                        short_desc = info["ExecutablePath"]
-                    elif "Name" in info:
-                        short_desc = info["Name"]
-
-                    item = self.create_item(
-                        category=kp.ItemCategory.KEYWORD,
-                        label=info["Caption"],
-                        short_desc=short_desc,
-                        target=info["Name"] + "|" + info["ProcessId"],
-                        icon_handle=self._get_icon(info["ExecutablePath"]),
-                        args_hint=kp.ItemArgsHint.REQUIRED,
-                        hit_hint=kp.ItemHitHint.IGNORE
-                    )
-                    self._processes.append(item)
-                info = {}
-            else:
-                # Save key=value in info dict
-                line_splitted = line.split("=")
-                label = line_splitted[0]
-                value = "=".join(line_splitted[1:])
-                # Skip system processes that cant be killed
-                if label == "Caption" and (value == "System Idle Process" or value == "System"):
-                    continue
-                info[label] = value
-
-        self.dbg("%d running processes found" % len(self._processes))
-        self.dbg("%d icons loaded" % len(self._icons))
-        # self.dbg(self._icons)
-        # for prc in self._processes:
-        #     self.dbg(prc.raw_args())
+        self.dbg("{:d} running processes found".format(len(self._processes)))
 
     def on_deactivated(self):
         """
             Emptys the process list, when Keypirinha Box is closed
         """
         self._processes = []
+
         # for ico in self._icons.values():
         #     ico.free()
-
         # self._icons = {}
 
     def on_suggest(self, user_input, items_chain):
@@ -207,31 +180,65 @@ class Kill(kp.Plugin):
 
     def on_execute(self, item, action):
         """
-            Executes the taskkill with the selected item and action
+            Executes the selected (or default) kill action on the selected item
         """
-
-        args = ["taskkill", "/F"]
-        # get default action
+        # get default action if no action was explicitly selected
         if action is None:
             for act in self._actions:
                 if act.name() == self._default_action:
                     action = act
 
+
+        if "_admin" in action.name():
+            self._kill_process_admin(item.target(), action.name())
+        else:
+            self._kill_process_normal(item.target(), action.name())
+
+    def _kill_process_normal(self, target, action_name):
+        """
+            Kills the selected process(es) using the windows api
+        """
+        target_name, target_pid = target.split("|")
+        if "kill_by_name" in action_name:
+            # loop over all processes and kill all by the same name
+            for process_item in self._processes:
+                pname, pid = process_item.target().split("|")
+                if pname == target_name:
+                    try:
+                        self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
+                        proc = simpleprocess.Process(int(pid))
+                        proc.kill()
+                    except simpleprocess.AccessDenied:
+                        self.warn("Access Denied on process '{}' (pid: {})".format(pname, pid))
+
+        elif "kill_by_id" in action_name:
+            # kill process with that pid
+            try:
+                self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
+                proc = simpleprocess.Process(int(target_pid))
+                proc.kill()
+            except simpleprocess.AccessDenied:
+                self.warn("Access Denied on process '{}' (pid: {})".format(target_name, target_pid))
+
+    def _kill_process_admin(self, target, action_name):
+        """
+            Kills the selected process(es) using a call to windows' taskkill.exe
+            with elevated rights
+        """
+        target_name, target_pid = target.split("|")
+        args = ["taskkill", "/F"]
+
         # add parameters according to action
-        if "kill_by_name" in action.name():
+        if "kill_by_name" in action_name:
             args.append("/IM")
             # process name
-            args.append(item.target().split("|")[0])
-        elif "kill_by_id" in action.name():
+            args.append(target_name)
+        elif "kill_by_id" in action_name:
             args.append("/PID")
             # process id
-            args.append(item.target().split("|")[1])
+            args.append(target_pid)
 
-        self.dbg("Calling: %s" % args)
-
-        verb = ""
-        if "_admin" in action.name():
-            verb = "runas"
+        self.dbg("Calling: {}".format(args))
 
         # show no window when executing
-        kpu.shell_execute(args[0], args[1:], verb=verb, show=subprocess.SW_HIDE)
+        kpu.shell_execute(args[0], args[1:], verb="runas", show=SW_HIDE)
