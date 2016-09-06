@@ -5,8 +5,6 @@ psapi = ct.windll.psapi
 ntdll = ct.windll.ntdll
 kernel = kpwt.kernel32
 
-ERROR_ACCESS_DENIED = 0x5
-
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
