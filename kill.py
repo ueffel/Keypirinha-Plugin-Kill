@@ -136,7 +136,7 @@ class Kill(kp.Plugin):
                 item = self.create_item(
                     category=kp.ItemCategory.KEYWORD,
                     label=name,
-                    short_desc="(pid: {}) {}".format(pid, proc.exe()), #" ".join(proc.cmdline())
+                    short_desc="(pid: {:5}) {}".format(pid, proc.exe()), #" ".join(proc.cmdline())
                     target="{}|{}".format(os.path.split(proc.exe())[1], str(pid)),
                     icon_handle=self._get_icon(proc.exe()),
                     args_hint=kp.ItemArgsHint.REQUIRED,
@@ -148,7 +148,7 @@ class Kill(kp.Plugin):
                 item = self.create_item(
                     category=kp.ItemCategory.KEYWORD,
                     label=name,
-                    short_desc="(pid: {}) Access Denied (probably only killable as Admin or not at all)".format(pid),
+                    short_desc="(pid: {:5}) Access Denied (probably only killable as Admin or not at all)".format(pid),
                     target="{}|{}".format(name, str(pid)),
                     icon_handle=None,
                     args_hint=kp.ItemArgsHint.REQUIRED,
