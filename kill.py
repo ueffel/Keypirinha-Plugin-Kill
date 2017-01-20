@@ -20,7 +20,7 @@ class Kill(kp.Plugin):
         self._actions = []
         self._icons = {}
         self._default_action = "kill_by_id"
-        self._debug = True
+        # self._debug = True
 
     def on_events(self, flags):
         """
@@ -136,14 +136,14 @@ class Kill(kp.Plugin):
                 item = self.create_item(
                     category=kp.ItemCategory.KEYWORD,
                     label=name,
-                    short_desc="(pid: {:5}) {}".format(pid, proc.exe()), #" ".join(proc.cmdline())
+                    short_desc="(pid: {:5}) {}".format(pid, proc.cmdline()),
                     target="{}|{}".format(os.path.split(proc.exe())[1], str(pid)),
                     icon_handle=self._get_icon(proc.exe()),
                     args_hint=kp.ItemArgsHint.REQUIRED,
                     hit_hint=kp.ItemHitHint.IGNORE
                 )
                 self._processes.append(item)
-                # self.dbg("Process added: {:13} {:5d} -> {}".format("normal", pid, name))
+                # self.dbg("Process added: {:13} {:5d} -> {}".format("normal", pid, proc.cmdline()))
             except simpleprocess.AccessDenied:
                 item = self.create_item(
                     category=kp.ItemCategory.KEYWORD,
