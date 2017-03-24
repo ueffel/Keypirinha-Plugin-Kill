@@ -1,9 +1,13 @@
 import keypirinha as kp
 import keypirinha_util as kpu
-import os
-from .lib import simpleprocess
+import subprocess
+import comtypes.client as com_cl
+import ctypes as ct
 
-SW_HIDE = 0
+NTDLL = ct.windll.ntdll
+KERNEL = ct.windll.kernel32
+
+PROCESS_TERMINATE = 0x0001
 
 class Kill(kp.Plugin):
     """
@@ -71,14 +75,16 @@ class Kill(kp.Plugin):
         kill_by_name_admin = self.create_action(
             name="kill_by_name_admin",
             label="Kill by Name (as Admin)",
-            short_desc="Kills all processes by that name with elevated rights (taskkill /F /IM <exe>)"
+            short_desc="Kills all processes by that name"
+            + " with elevated rights (taskkill /F /IM <exe>)"
         )
         self._actions.append(kill_by_name_admin)
 
         kill_by_id_admin = self.create_action(
             name="kill_by_id_admin",
             label="Kill by PID (as Admin)",
-            short_desc="Kills single process by its process id with elevated rights (taskkill /F /PID <pid>)"
+            short_desc="Kills single process by its process id"
+            + " with elevated rights (taskkill /F /PID <pid>)"
         )
         self._actions.append(kill_by_id_admin)
 
@@ -93,7 +99,7 @@ class Kill(kp.Plugin):
         killcmd = self.create_item(
             category=kp.ItemCategory.KEYWORD,
             label="Kill:",
-            short_desc="Kills a processes",
+            short_desc="Kills running processes",
             target="kill",
             args_hint=kp.ItemArgsHint.REQUIRED,
             hit_hint=kp.ItemHitHint.KEEPALL
@@ -123,41 +129,133 @@ class Kill(kp.Plugin):
         """
             Creates the list of running processes, when the Keypirinha Box is
             triggered
-            Uses the windows api
         """
-        pids = simpleprocess.getpids()
-        for (pid, name) in pids:
-            # Don't care about the system processes, they're not killable anyway
-            if pid == 0 or pid == 4:
-                continue
+        wmi = com_cl.CoGetObject("winmgmts:")
+        if wmi:
+            self._get_processes_from_com_object(wmi)
+        else:
+            self.warn("Windows Management Service is not running.")
+            self._get_processes_from_ext_call()
 
-            proc = simpleprocess.Process(pid)
+        self.dbg("%d running processes found" % len(self._processes))
+        self.dbg("%d icons loaded" % len(self._icons))
+        # self.dbg(self._icons)
+        # for prc in self._processes:
+        #     self.dbg(prc.raw_args())
+
+    def _get_processes_from_com_object(self, wmi):
+        """
+            Creates the list of running processes
+            Windows Management COMObject (WMI) to get the running processes
+        """
+        result_wmi = wmi.ExecQuery("SELECT ProcessId, Caption, Name, ExecutablePath, CommandLine "
+                                   + "FROM Win32_Process")
+        for proc in result_wmi:
+            short_desc = ""
+            if proc.Properties_["CommandLine"].Value is not None:
+                short_desc = "(pid: {:5}) {}".format(
+                    proc.Properties_["ProcessId"].Value,
+                    proc.Properties_["CommandLine"].Value
+                )
+            elif proc.Properties_["ExecutablePath"].Value:
+                short_desc = "(pid: {:5}) {}".format(
+                    proc.Properties_["ProcessId"].Value,
+                    proc.Properties_["ExecutablePath"].Value
+                )
+            elif proc.Properties_["Name"].Value:
+                short_desc = "(pid: {:5}) {} ({})".format(
+                    proc.Properties_["ProcessId"].Value,
+                    proc.Properties_["Name"].Value,
+                    "Probably only killable as admin or not at all"
+                )
+            item = self.create_item(
+                category=kp.ItemCategory.KEYWORD,
+                label=proc.Properties_["Caption"].Value,
+                short_desc=short_desc,
+                target=proc.Properties_["Name"].Value + "|"
+                + str(proc.Properties_["ProcessId"].Value),
+                icon_handle=self._get_icon(proc.Properties_["ExecutablePath"].Value),
+                args_hint=kp.ItemArgsHint.REQUIRED,
+                hit_hint=kp.ItemHitHint.IGNORE
+            )
+            self._processes.append(item)
+
+    def _get_processes_from_ext_call(self):
+        """
+            FALLBACK
+            Creates the list of running processes
+            Uses Windows' "wmic.exe" tool to get the running processes
+        """
+        # Using external call to wmic to get the list of running processes
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        output, err = subprocess.Popen(["wmic",
+                                        "process",
+                                        "get",
+                                        "ProcessId,Caption,",
+                                        "Name,ExecutablePath,CommandLine",
+                                        "/FORMAT:LIST"],
+                                       stdout=subprocess.PIPE,
+                                       # universal_newlines=True,
+                                       shell=False,
+                                       startupinfo=startupinfo).communicate()
+        # log error if any
+        if err:
+            self.err(err)
+
+        # Parsing process list from output
+        for enc in ["cp437", "cp850", "cp1252", "utf8"]:
             try:
-                item = self.create_item(
-                    category=kp.ItemCategory.KEYWORD,
-                    label=name,
-                    short_desc="(pid: {:5}) {}".format(pid, proc.cmdline()),
-                    target="{}|{}".format(os.path.split(proc.exe())[1], str(pid)),
-                    icon_handle=self._get_icon(proc.exe()),
-                    args_hint=kp.ItemArgsHint.REQUIRED,
-                    hit_hint=kp.ItemHitHint.IGNORE
-                )
-                self._processes.append(item)
-                # self.dbg("Process added: {:13} {:5d} -> {}".format("normal", pid, proc.cmdline()))
-            except simpleprocess.AccessDenied:
-                item = self.create_item(
-                    category=kp.ItemCategory.KEYWORD,
-                    label=name,
-                    short_desc="(pid: {:5}) Access Denied (probably only killable as Admin or not at all)".format(pid),
-                    target="{}|{}".format(name, str(pid)),
-                    icon_handle=None,
-                    args_hint=kp.ItemArgsHint.REQUIRED,
-                    hit_hint=kp.ItemHitHint.IGNORE
-                )
-                self._processes.append(item)
-                # self.dbg("Process added: {:13} {:5d} -> {}".format("access_denied", pid, name))
+                output = output.replace(b"\r\r", b"\r")
+                outstr = output.decode(enc)
+                break
+            except UnicodeDecodeError:
+                self.dbg(enc + " threw exception")
 
-        self.dbg("{:d} running processes found".format(len(self._processes)))
+        info = {}
+        for line in outstr.splitlines():
+            # self.dbg(line)
+            if line.strip() == "":
+                # build catalog item with gathered information from parsing
+                if info and "Caption" in info:
+                    short_desc = ""
+
+                    if "CommandLine" in info and info["CommandLine"] != "":
+                        short_desc = "(pid: {:5}) {}".format(
+                            info["ProcessId"],
+                            info["CommandLine"]
+                        )
+                    elif "ExecutablePath" in info and info["ExecutablePath"] != "":
+                        short_desc = "(pid: {:5}) {}".format(
+                            info["ProcessId"],
+                            info["ExecutablePath"]
+                        )
+                    elif "Name" in info:
+                        short_desc = "(pid: {:5}) {}".format(
+                            info["ProcessId"],
+                            info["Name"]
+                        )
+
+                    item = self.create_item(
+                        category=kp.ItemCategory.KEYWORD,
+                        label=info["Caption"],
+                        short_desc=short_desc,
+                        target=info["Name"] + "|" + info["ProcessId"],
+                        icon_handle=self._get_icon(info["ExecutablePath"]),
+                        args_hint=kp.ItemArgsHint.REQUIRED,
+                        hit_hint=kp.ItemHitHint.IGNORE
+                    )
+                    self._processes.append(item)
+                info = {}
+            else:
+                # Save key=value in info dict
+                line_splitted = line.split("=")
+                label = line_splitted[0]
+                value = "=".join(line_splitted[1:])
+                # Skip system processes that cant be killed
+                if label == "Caption" and (value == "System Idle Process" or value == "System"):
+                    continue
+                info[label] = value
 
     def on_deactivated(self):
         """
@@ -204,21 +302,29 @@ class Kill(kp.Plugin):
             for process_item in self._processes:
                 pname, pid = process_item.target().split("|")
                 if pname == target_name:
-                    try:
-                        self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
-                        proc = simpleprocess.Process(int(pid))
-                        proc.kill()
-                    except simpleprocess.AccessDenied:
-                        self.warn("Access Denied on process '{}' (pid: {})".format(pname, pid))
+                    self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
+                    proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
+                    if not proc_handle:
+                        self.warn("OpenProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                        continue
+                    success = KERNEL.TerminateProcess(proc_handle, 1)
+                    if not success:
+                        self.warn("TerminateProcess failed, ErrorCode: "
+                                  + str(KERNEL.GetLastError()))
+                        continue
 
         elif "kill_by_id" in action_name:
             # kill process with that pid
-            try:
-                self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
-                proc = simpleprocess.Process(int(target_pid))
-                proc.kill()
-            except simpleprocess.AccessDenied:
-                self.warn("Access Denied on process '{}' (pid: {})".format(target_name, target_pid))
+            self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
+            pid = int(target_pid)
+            proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
+            if not proc_handle:
+                self.warn("OpenProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                return
+            success = KERNEL.TerminateProcess(proc_handle, 1)
+            if not success:
+                self.warn("TerminateProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                return
 
     def _kill_process_admin(self, target, action_name):
         """
@@ -241,4 +347,4 @@ class Kill(kp.Plugin):
         self.dbg("Calling: {}".format(args))
 
         # show no window when executing
-        kpu.shell_execute(args[0], args[1:], verb="runas", show=SW_HIDE)
+        kpu.shell_execute(args[0], args[1:], verb="runas", show=subprocess.SW_HIDE)
