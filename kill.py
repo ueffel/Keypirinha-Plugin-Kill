@@ -128,7 +128,7 @@ class Kill(kp.Plugin):
                 icon = None
             return icon
 
-    def on_activated(self):
+    def _get_processes(self):
         """
             Creates the list of running processes, when the Keypirinha Box is
             triggered
@@ -279,6 +279,9 @@ class Kill(kp.Plugin):
         """
         if not items_chain:
             return
+
+        if not self._processes:
+            self._get_processes()
 
         self.set_suggestions(self._processes, kp.Match.FUZZY, kp.Sort.SCORE_DESC)
 
