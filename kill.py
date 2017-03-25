@@ -1,8 +1,12 @@
 import keypirinha as kp
 import keypirinha_util as kpu
 import subprocess
-import comtypes.client as com_cl
 import ctypes as ct
+
+try:
+    import comtypes.client as com_cl
+except ImportError:
+    com_cl = None
 
 NTDLL = ct.windll.ntdll
 KERNEL = ct.windll.kernel32
@@ -130,7 +134,10 @@ class Kill(kp.Plugin):
             Creates the list of running processes, when the Keypirinha Box is
             triggered
         """
-        wmi = com_cl.CoGetObject("winmgmts:")
+        wmi = None
+        if com_cl:
+            wmi = com_cl.CoGetObject("winmgmts:")
+
         if wmi:
             self._get_processes_from_com_object(wmi)
         else:
