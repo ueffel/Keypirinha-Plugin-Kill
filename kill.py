@@ -8,7 +8,6 @@ try:
 except ImportError:
     com_cl = None
 
-NTDLL = ct.windll.ntdll
 KERNEL = ct.windll.kernel32
 
 PROCESS_TERMINATE = 0x0001
