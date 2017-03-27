@@ -310,6 +310,7 @@ class Kill(kp.Plugin):
             # loop over all processes and kill all by the same name
             for process_item in self._processes:
                 pname, pid = process_item.target().split("|")
+                pid = int(pid)
                 if pname == target_name:
                     self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
                     proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
