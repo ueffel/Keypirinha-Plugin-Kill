@@ -11,3 +11,7 @@ There some alternative actions, if you hit Ctrl+Enter which should be self-expla
 
 ## Installation
 See Release Notes.
+
+## Acknowledgements
+
+Parts of the code are taken from [Keypirinha's Packages Repository](https://github.com/Keypirinha/Packages). Specifically the alttab.py library file to obtain visible windows is taken from [here](https://github.com/Keypirinha/Packages/blob/9e1a0645b16577a8cefd64510cbc15690ae8ceeb/TaskSwitcher/lib/alttab.py)
