@@ -3,6 +3,7 @@ import keypirinha_util as kpu
 import subprocess
 import ctypes as ct
 import time
+from .lib.alttab import AltTab
 
 try:
     import comtypes.client as com_cl
@@ -37,9 +38,11 @@ class Kill(kp.Plugin):
         """
         super().__init__()
         self._processes = []
+        self._processes_with_window = []
         self._actions = []
         self._icons = {}
         self._default_action = "kill_by_id"
+        self._hide_background = False
         # self._debug = True
 
     def on_events(self, flags):
@@ -68,6 +71,8 @@ class Kill(kp.Plugin):
             self._default_action,
             possible_actions
         )
+
+        self._hide_background = settings.get_bool("hide_background", "main", False)
 
     def on_start(self):
         """
@@ -172,10 +177,22 @@ class Kill(kp.Plugin):
         elapsed = time.time() - start_time
 
         self.info("Found {} running processes in {:0.1f} seconds".format(len(self._processes), elapsed))
-        self.dbg("%d icons loaded" % len(self._icons))
-        # self.dbg(self._icons)
-        # for prc in self._processes:
-        #     self.dbg(prc.raw_args())
+        self.dbg("{} icons loaded".format(len(self._icons)))
+
+    def _get_windows(self):
+        try:
+            handles = AltTab.list_alttab_windows()
+        except OSError:
+            self.err("Failed to list windows.", str(exc))
+
+        self._processes_with_window = []
+
+        for hwnd in handles:
+            try:
+                (_, proc_id) = AltTab.get_window_thread_process_id(hwnd)
+                self._processes_with_window.append(proc_id)
+            except OSError:
+                continue
 
     def _get_processes_from_com_object(self, wmi):
         """
@@ -185,23 +202,27 @@ class Kill(kp.Plugin):
         result_wmi = wmi.ExecQuery("SELECT ProcessId, Caption, Name, ExecutablePath, CommandLine "
                                    + "FROM Win32_Process")
         for proc in result_wmi:
+            is_foreground = proc.Properties_["ProcessId"].Value in self._processes_with_window
+            if self._hide_background and not is_foreground:
+                continue
+
             short_desc = ""
             category = kp.ItemCategory.KEYWORD
             databag = {}
             if proc.Properties_["CommandLine"].Value:
-                short_desc = "(pid: {:5}) {}".format(
+                short_desc = "(pid: {:>5}) {}".format(
                     proc.Properties_["ProcessId"].Value,
                     proc.Properties_["CommandLine"].Value
                 )
                 category = RESTARTABLE
                 databag["CommandLine"] = proc.Properties_["CommandLine"].Value
             elif proc.Properties_["ExecutablePath"].Value:
-                short_desc = "(pid: {:5}) {}".format(
+                short_desc = "(pid: {:>5}) {}".format(
                     proc.Properties_["ProcessId"].Value,
                     proc.Properties_["ExecutablePath"].Value
                 )
             elif proc.Properties_["Name"].Value:
-                short_desc = "(pid: {:5}) {} ({})".format(
+                short_desc = "(pid: {:>5}) {} ({})".format(
                     proc.Properties_["ProcessId"].Value,
                     proc.Properties_["Name"].Value,
                     "Probably only killable as admin or not at all"
@@ -210,9 +231,16 @@ class Kill(kp.Plugin):
             if proc.Properties_["ExecutablePath"].Value:
                 databag["ExecutablePath"] = proc.Properties_["ExecutablePath"].Value
 
+            label = proc.Properties_["Caption"].Value
+            if not self._hide_background:
+                if is_foreground:
+                    label = label + " (foreground)"
+                else:
+                    label = label + " (background)"
+
             item = self.create_item(
                 category=category,
-                label=proc.Properties_["Caption"].Value,
+                label=label,
                 short_desc=short_desc,
                 target=proc.Properties_["Name"].Value + "|"
                 + str(proc.Properties_["ProcessId"].Value),
@@ -260,23 +288,27 @@ class Kill(kp.Plugin):
             if line.strip() == "":
                 # build catalog item with gathered information from parsing
                 if info and "Caption" in info:
+                    is_foreground = int(info["ProcessId"]) in self._processes_with_window
+                    if self._hide_background and not is_foreground:
+                        continue
+
                     short_desc = ""
                     category = kp.ItemCategory.KEYWORD
                     databag = {}
                     if "CommandLine" in info and info["CommandLine"] != "":
-                        short_desc = "(pid: {:5}) {}".format(
+                        short_desc = "(pid: {:>5}) {}".format(
                             info["ProcessId"],
                             info["CommandLine"]
                         )
                         category = RESTARTABLE
                         databag["CommandLine"] = info["CommandLine"]
                     elif "ExecutablePath" in info and info["ExecutablePath"] != "":
-                        short_desc = "(pid: {:5}) {}".format(
+                        short_desc = "(pid: {:>5}) {}".format(
                             info["ProcessId"],
                             info["ExecutablePath"]
                         )
                     elif "Name" in info:
-                        short_desc = "(pid: {:5}) {}".format(
+                        short_desc = "(pid: {:>5}) {}".format(
                             info["ProcessId"],
                             info["Name"]
                         )
@@ -284,9 +316,16 @@ class Kill(kp.Plugin):
                     if "ExecutablePath" in info and info["ExecutablePath"] != "":
                         databag["ExecutablePath"] = info["ExecutablePath"]
 
+                    label = info["Caption"]
+                    if not self._hide_background:
+                        if is_foreground:
+                            label = label + " (foreground)"
+                        else:
+                            label = label + " (background)"
+
                     item = self.create_item(
                         category=category,
-                        label=info["Caption"],
+                        label=label,
                         short_desc=short_desc,
                         target=info["Name"] + "|" + info["ProcessId"],
                         icon_handle=self._get_icon(info["ExecutablePath"]),
@@ -322,6 +361,9 @@ class Kill(kp.Plugin):
         """
         if not items_chain:
             return
+
+        if not self._processes_with_window:
+            self._get_windows()
 
         if not self._processes:
             self._get_processes()
