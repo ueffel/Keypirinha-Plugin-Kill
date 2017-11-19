@@ -2,6 +2,7 @@ import keypirinha as kp
 import keypirinha_util as kpu
 import subprocess
 import ctypes as ct
+import time
 
 try:
     import comtypes.client as com_cl
@@ -11,6 +12,18 @@ except ImportError:
 KERNEL = ct.windll.kernel32
 
 PROCESS_TERMINATE = 0x0001
+SYNCHRONIZE = 0x00100000
+
+RESTARTABLE = kp.ItemCategory.USER_BASE + 1
+
+CommandLineToArgvW = ct.windll.shell32.CommandLineToArgvW
+CommandLineToArgvW.argtypes = [ct.wintypes.LPCWSTR, ct.POINTER(ct.c_int)]
+CommandLineToArgvW.restype = ct.POINTER(ct.wintypes.LPWSTR)
+
+WAIT_ABANDONED = 0x00000080
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
+WAIT_FAILED = 0xFFFFFFFF
 
 class Kill(kp.Plugin):
     """
@@ -93,6 +106,17 @@ class Kill(kp.Plugin):
 
         self.set_actions(kp.ItemCategory.KEYWORD, self._actions)
 
+        kill_and_restart_by_id = self.create_action(
+            name="kill_and_restart_by_id",
+            label="Kill by PID and restart application",
+            short_desc="Kills single process by its process id"
+            + " and tries to restart it"
+        )
+
+        self._actions.append(kill_and_restart_by_id)
+
+        self.set_actions(RESTARTABLE, self._actions)
+
     def on_catalog(self):
         """
             Adds the kill command to the catalog
@@ -133,6 +157,8 @@ class Kill(kp.Plugin):
             Creates the list of running processes, when the Keypirinha Box is
             triggered
         """
+        start_time = time.time()
+
         wmi = None
         if com_cl:
             wmi = com_cl.CoGetObject("winmgmts:")
@@ -143,7 +169,9 @@ class Kill(kp.Plugin):
             self.warn("Windows Management Service is not running.")
             self._get_processes_from_ext_call()
 
-        self.dbg("%d running processes found" % len(self._processes))
+        elapsed = time.time() - start_time
+
+        self.info("Found {} running processes in {:0.1f} seconds".format(len(self._processes), elapsed))
         self.dbg("%d icons loaded" % len(self._icons))
         # self.dbg(self._icons)
         # for prc in self._processes:
@@ -158,11 +186,15 @@ class Kill(kp.Plugin):
                                    + "FROM Win32_Process")
         for proc in result_wmi:
             short_desc = ""
-            if proc.Properties_["CommandLine"].Value is not None:
+            category = kp.ItemCategory.KEYWORD
+            databag = {}
+            if proc.Properties_["CommandLine"].Value:
                 short_desc = "(pid: {:5}) {}".format(
                     proc.Properties_["ProcessId"].Value,
                     proc.Properties_["CommandLine"].Value
                 )
+                category = RESTARTABLE
+                databag["CommandLine"] = proc.Properties_["CommandLine"].Value
             elif proc.Properties_["ExecutablePath"].Value:
                 short_desc = "(pid: {:5}) {}".format(
                     proc.Properties_["ProcessId"].Value,
@@ -174,15 +206,20 @@ class Kill(kp.Plugin):
                     proc.Properties_["Name"].Value,
                     "Probably only killable as admin or not at all"
                 )
+
+            if proc.Properties_["ExecutablePath"].Value:
+                databag["ExecutablePath"] = proc.Properties_["ExecutablePath"].Value
+
             item = self.create_item(
-                category=kp.ItemCategory.KEYWORD,
+                category=category,
                 label=proc.Properties_["Caption"].Value,
                 short_desc=short_desc,
                 target=proc.Properties_["Name"].Value + "|"
                 + str(proc.Properties_["ProcessId"].Value),
                 icon_handle=self._get_icon(proc.Properties_["ExecutablePath"].Value),
                 args_hint=kp.ItemArgsHint.REQUIRED,
-                hit_hint=kp.ItemHitHint.IGNORE
+                hit_hint=kp.ItemHitHint.IGNORE,
+                data_bag=str(databag)
             )
             self._processes.append(item)
 
@@ -220,17 +257,19 @@ class Kill(kp.Plugin):
 
         info = {}
         for line in outstr.splitlines():
-            # self.dbg(line)
             if line.strip() == "":
                 # build catalog item with gathered information from parsing
                 if info and "Caption" in info:
                     short_desc = ""
-
+                    category = kp.ItemCategory.KEYWORD
+                    databag = {}
                     if "CommandLine" in info and info["CommandLine"] != "":
                         short_desc = "(pid: {:5}) {}".format(
                             info["ProcessId"],
                             info["CommandLine"]
                         )
+                        category = RESTARTABLE
+                        databag["CommandLine"] = info["CommandLine"]
                     elif "ExecutablePath" in info and info["ExecutablePath"] != "":
                         short_desc = "(pid: {:5}) {}".format(
                             info["ProcessId"],
@@ -242,14 +281,18 @@ class Kill(kp.Plugin):
                             info["Name"]
                         )
 
+                    if "ExecutablePath" in info and info["ExecutablePath"] != "":
+                        databag["ExecutablePath"] = info["ExecutablePath"]
+
                     item = self.create_item(
-                        category=kp.ItemCategory.KEYWORD,
+                        category=category,
                         label=info["Caption"],
                         short_desc=short_desc,
                         target=info["Name"] + "|" + info["ProcessId"],
                         icon_handle=self._get_icon(info["ExecutablePath"]),
                         args_hint=kp.ItemArgsHint.REQUIRED,
-                        hit_hint=kp.ItemHitHint.IGNORE
+                        hit_hint=kp.ItemHitHint.IGNORE,
+                        data_bag=str(databag)
                     )
                     self._processes.append(item)
                 info = {}
@@ -297,15 +340,15 @@ class Kill(kp.Plugin):
 
 
         if "_admin" in action.name():
-            self._kill_process_admin(item.target(), action.name())
+            self._kill_process_admin(item, action.name())
         else:
-            self._kill_process_normal(item.target(), action.name())
+            self._kill_process_normal(item, action.name())
 
-    def _kill_process_normal(self, target, action_name):
+    def _kill_process_normal(self, target_item, action_name):
         """
             Kills the selected process(es) using the windows api
         """
-        target_name, target_pid = target.split("|")
+        target_name, target_pid = target_item.target().split("|")
         if "kill_by_name" in action_name:
             # loop over all processes and kill all by the same name
             for process_item in self._processes:
@@ -335,13 +378,55 @@ class Kill(kp.Plugin):
             if not success:
                 self.warn("TerminateProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
                 return
+        elif "kill_and_restart_by_id":
+            # kill process with that pid and try to restart it
+            self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
+            pid = int(target_pid)
+            proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
+            if not proc_handle:
+                self.warn("OpenProcess failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                return
+            success = KERNEL.TerminateProcess(proc_handle, 1)
+            if not success:
+                self.warn("TerminateProcess failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                return
 
-    def _kill_process_admin(self, target, action_name):
+            self.dbg("Waiting for exit")
+            result = KERNEL.WaitForSingleObject(proc_handle, ct.wintypes.DWORD(3000))
+            if result == WAIT_FAILED:
+                self.warn("WaitForSingleObject failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                return
+            if result == WAIT_TIMEOUT:
+                self.warn("WaitForSingleObject timed out.")
+                return
+            if result != WAIT_OBJECT_0:
+                self.warn("Something weird happened in WaitForSingleObject: {}".format(result))
+                return
+
+            databag = eval(target_item.data_bag())
+            self.dbg(databag)
+            if "CommandLine" not in databag:
+                self.dbg("No commandline, cannot restart")
+                return
+            cmd = ct.wintypes.LPCWSTR(databag["CommandLine"])
+            argc = ct.c_int(0)
+            argv = CommandLineToArgvW(cmd, ct.byref(argc))
+            if argc.value <= 0:
+                self.dbg("No args parsed")
+                return
+            args = [argv[i] for i in range(0, argc.value)]
+            self.dbg(args)
+            if args[0] == '' or args[0].isspace():
+                args[0] = databag["ExecutablePath"]
+            self.dbg(args)
+            kpu.shell_execute(args[0], args[1:])
+
+    def _kill_process_admin(self, target_item, action_name):
         """
             Kills the selected process(es) using a call to windows' taskkill.exe
             with elevated rights
         """
-        target_name, target_pid = target.split("|")
+        target_name, target_pid = target_item.target().split("|")
         args = ["taskkill", "/F"]
 
         # add parameters according to action
