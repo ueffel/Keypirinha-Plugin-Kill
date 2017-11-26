@@ -1,46 +1,48 @@
 @echo off
-SET SEVENZIP=
+set PACKAGE_NAME=Kill
 
+set SEVENZIP=
 where 7z > nul 2>&1
 if not errorlevel 1 (
     set SEVENZIP=7z
-    goto pack
+    goto done_sevenzip
 )
 
 where 7za > nul 2>&1
 if not errorlevel 1 (
     set SEVENZIP=7za
-    goto pack
+    goto done_sevenzip
 )
 
 if exist "c:\Program Files (x86)\7-Zip\7z.exe" (
-    SET "SEVENZIP=c:\Program Files (x86)\7-Zip\7z.exe"
-    goto pack
+    set "SEVENZIP=c:\Program Files (x86)\7-Zip\7z.exe"
+    goto done_sevenzip
 )
 
 if exist "c:\Program Files (x86)\7-Zip\7za.exe" (
-    SET "SEVENZIP=c:\Program Files (x86)\7-Zip\7za.exe"
-    goto pack
+    set "SEVENZIP=c:\Program Files (x86)\7-Zip\7za.exe"
+    goto done_sevenzip
 )
 
 if exist "c:\Program Files\7-Zip\7z.exe" (
-    SET "SEVENZIP=c:\Program Files\7-Zip\7z.exe"
-    goto pack
+    set "SEVENZIP=c:\Program Files\7-Zip\7z.exe"
+    goto done_sevenzip
 )
 
 if exist "c:\Program Files\7-Zip\7za.exe" (
-    SET "SEVENZIP=c:\Program Files\7-Zip\7za.exe"
-    goto pack
+    set "SEVENZIP=c:\Program Files\7-Zip\7za.exe"
+    goto done_sevenzip
 )
 
 if NOT DEFINED SEVENZIP (
     echo 7zip not found
     exit /b 1
 )
+:done_sevenzip
 
 :pack
-if exist Kill.keypirinha-package (
-    del Kill.keypirinha-package
+if exist %PACKAGE_NAME%.keypirinha-package (
+    del %PACKAGE_NAME%.keypirinha-package
 )
 echo Using "%SEVENZIP%" to pack
-"%SEVENZIP%" a -mx9 -tzip Kill.keypirinha-package  -x!%~nx0 -xr!.git *
+"%SEVENZIP%" a -mx9 -tzip %PACKAGE_NAME%.keypirinha-package  -x!%~nx0 -xr!.git *
