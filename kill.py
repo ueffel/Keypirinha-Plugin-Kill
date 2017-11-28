@@ -38,7 +38,7 @@ class Kill(kp.Plugin):
         """
         super().__init__()
         self._processes = []
-        self._processes_with_window = []
+        self._processes_with_window = {}
         self._actions = []
         self._icons = {}
         self._default_action = "kill_by_id"
@@ -185,12 +185,12 @@ class Kill(kp.Plugin):
         except OSError:
             self.err("Failed to list windows.", str(exc))
 
-        self._processes_with_window = []
+        self._processes_with_window = {}
 
         for hwnd in handles:
             try:
                 (_, proc_id) = AltTab.get_window_thread_process_id(hwnd)
-                self._processes_with_window.append(proc_id)
+                self._processes_with_window[proc_id] = hwnd
             except OSError:
                 continue
 
@@ -231,19 +231,26 @@ class Kill(kp.Plugin):
             if proc.Properties_["ExecutablePath"].Value:
                 databag["ExecutablePath"] = proc.Properties_["ExecutablePath"].Value
 
-            label = proc.Properties_["Caption"].Value
             if not self._hide_background:
                 if is_foreground:
-                    label = label + " (foreground)"
+                    label = '{}: "{}" ({})'.format(
+                        proc.Properties_["Caption"].Value,
+                        AltTab.get_window_text(self._processes_with_window[proc.Properties_["ProcessId"].Value]),
+                        'foreground'
+                    )
                 else:
-                    label = label + " (background)"
+                    label = '{} ({})'.format(proc.Properties_["Caption"].Value, 'background')
+            else:
+                label = '{}: "{}"'.format(
+                    proc.Properties_["Caption"].Value,
+                    AltTab.get_window_text(self._processes_with_window[proc.Properties_["ProcessId"].Value])
+                )
 
             item = self.create_item(
                 category=category,
                 label=label,
                 short_desc=short_desc,
-                target=proc.Properties_["Name"].Value + "|"
-                + str(proc.Properties_["ProcessId"].Value),
+                target=proc.Properties_["Name"].Value + "|" + str(proc.Properties_["ProcessId"].Value),
                 icon_handle=self._get_icon(proc.Properties_["ExecutablePath"].Value),
                 args_hint=kp.ItemArgsHint.REQUIRED,
                 hit_hint=kp.ItemHitHint.IGNORE,
@@ -349,6 +356,7 @@ class Kill(kp.Plugin):
         """
             Emptys the process list, when Keypirinha Box is closed
         """
+        self._processes_with_window = {}
         self._processes = []
 
         # for ico in self._icons.values():
@@ -379,7 +387,6 @@ class Kill(kp.Plugin):
             for act in self._actions:
                 if act.name() == self._default_action:
                     action = act
-
 
         if "_admin" in action.name():
             self._kill_process_admin(item, action.name())
