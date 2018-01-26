@@ -10,7 +10,7 @@ Type the trigger "kill" in the launch box and you'll see the item "Kill:". After
 There some alternative actions, if you hit Ctrl+Enter which should be self-explaining.
 
 ## Installation
-See Release Notes.
+See [Release Notes](https://github.com/ueffel/Keypirinha-Plugin-Kill/releases/latest).
 
 ## Acknowledgements
 
