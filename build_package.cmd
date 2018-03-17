@@ -45,4 +45,10 @@ if exist %PACKAGE_NAME%.keypirinha-package (
     del %PACKAGE_NAME%.keypirinha-package
 )
 echo Using "%SEVENZIP%" to pack
-"%SEVENZIP%" a -mx9 -tzip %PACKAGE_NAME%.keypirinha-package  -x!%~nx0 -xr!.git *
+"%SEVENZIP%" a -mx9 ^
+    -tzip "%PACKAGE_NAME%.keypirinha-package" ^
+    -x!%~nx0 ^
+    -xr!.git ^
+    -x@.gitignore ^
+    -x!.gitignore ^
+    *

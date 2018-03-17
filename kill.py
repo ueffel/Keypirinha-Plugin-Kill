@@ -27,14 +27,11 @@ WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
 
 class Kill(kp.Plugin):
-    """
-        Plugin that lists running processes with name and commandline (if
-        available) and kills the selected process(es)
+    """Plugin that lists running processes with name and commandline (if available) and kills the selected process(es)
     """
 
     def __init__(self):
-        """
-            Default constructor and initializing internal attributes
+        """Default constructor and initializing internal attributes
         """
         super().__init__()
         self._processes = []
@@ -43,18 +40,17 @@ class Kill(kp.Plugin):
         self._icons = {}
         self._default_action = "kill_by_id"
         self._hide_background = False
-        # self._debug = True
+        self._default_icon = None
+        self._debug = False
 
     def on_events(self, flags):
-        """
-            Reloads the package config when its changed
+        """Reloads the package config when its changed
         """
         if flags & kp.Events.PACKCONFIG:
             self._read_config()
 
     def _read_config(self):
-        """
-            Reads the default action from the config
+        """Reads the default action from the config
         """
         settings = self.load_settings()
 
@@ -75,8 +71,7 @@ class Kill(kp.Plugin):
         self._hide_background = settings.get_bool("hide_background", "main", False)
 
     def on_start(self):
-        """
-            Creates the actions for killing the processes and register them
+        """Creates the actions for killing the processes and register them
         """
         self._read_config()
         kill_by_name = self.create_action(
@@ -119,15 +114,15 @@ class Kill(kp.Plugin):
         )
 
         self._actions.append(kill_and_restart_by_id)
-
         self.set_actions(RESTARTABLE, self._actions)
 
+        self._default_icon = self.load_icon("res://{}/kill.ico".format(self.package_full_name()))
+        self.dbg(self._default_icon)
+
     def on_catalog(self):
-        """
-            Adds the kill command to the catalog
+        """Adds the kill command to the catalog
         """
         catalog = []
-
         killcmd = self.create_item(
             category=kp.ItemCategory.KEYWORD,
             label="Kill:",
@@ -136,16 +131,15 @@ class Kill(kp.Plugin):
             args_hint=kp.ItemArgsHint.REQUIRED,
             hit_hint=kp.ItemHitHint.KEEPALL
         )
-
         catalog.append(killcmd)
-
         self.set_catalog(catalog)
 
     def _get_icon(self, source):
+        """Tries to load the first icon within the source which should be a path to an executable
         """
-            Tries to load the first icon within the source which should be a
-            path to an executable
-        """
+        if not source:
+            return self._default_icon
+
         if source in self._icons:
             return self._icons[source]
         else:
@@ -153,14 +147,14 @@ class Kill(kp.Plugin):
                 icon = self.load_icon("@{},0".format(source))
                 self._icons[source] = icon
             except ValueError:
-                self.dbg("Icon loading failed :( {}".format(source))
+                self.dbg("Icon loading failed :( ", source)
                 icon = None
+            if not icon:
+                return self._default_icon
             return icon
 
     def _get_processes(self):
-        """
-            Creates the list of running processes, when the Keypirinha Box is
-            triggered
+        """Creates the list of running processes, when the Keypirinha Box is triggered
         """
         start_time = time.time()
 
@@ -177,9 +171,11 @@ class Kill(kp.Plugin):
         elapsed = time.time() - start_time
 
         self.info("Found {} running processes in {:0.1f} seconds".format(len(self._processes), elapsed))
-        self.dbg("{} icons loaded".format(len(self._icons)))
+        self.dbg(len(self._icons), "icons loaded")
 
     def _get_windows(self):
+        """Gets the list of open windows create a mapping between pid and hwnd
+        """
         try:
             handles = AltTab.list_alttab_windows()
         except OSError:
@@ -189,15 +185,15 @@ class Kill(kp.Plugin):
 
         for hwnd in handles:
             try:
-                (_, proc_id) = AltTab.get_window_thread_process_id(hwnd)
+                _, proc_id = AltTab.get_window_thread_process_id(hwnd)
                 self._processes_with_window[proc_id] = hwnd
             except OSError:
                 continue
 
     def _get_processes_from_com_object(self, wmi):
-        """
-            Creates the list of running processes
-            Windows Management COMObject (WMI) to get the running processes
+        """Creates the list of running processes
+
+        Uses Windows Management COMObject (WMI) to get the running processes
         """
         result_wmi = wmi.ExecQuery("SELECT ProcessId, Caption, Name, ExecutablePath, CommandLine "
                                    + "FROM Win32_Process")
@@ -259,10 +255,10 @@ class Kill(kp.Plugin):
             self._processes.append(item)
 
     def _get_processes_from_ext_call(self):
-        """
-            FALLBACK
-            Creates the list of running processes
-            Uses Windows' "wmic.exe" tool to get the running processes
+        """FALLBACK
+
+        Creates the list of running processes
+        Uses Windows' "wmic.exe" tool to get the running processes
         """
         # Using external call to wmic to get the list of running processes
         startupinfo = subprocess.STARTUPINFO()
@@ -288,7 +284,7 @@ class Kill(kp.Plugin):
                 outstr = output.decode(enc)
                 break
             except UnicodeDecodeError:
-                self.dbg(enc + " threw exception")
+                self.dbg(enc, "threw exception")
 
         info = {}
         for line in outstr.splitlines():
@@ -326,9 +322,9 @@ class Kill(kp.Plugin):
                     label = info["Caption"]
                     if not self._hide_background:
                         if is_foreground:
-                            label = label + " (foreground)"
+                            label = "{} (foreground)".format(label)
                         else:
-                            label = label + " (background)"
+                            label = "{} (background)".format(label)
 
                     item = self.create_item(
                         category=category,
@@ -353,19 +349,17 @@ class Kill(kp.Plugin):
                 info[label] = value
 
     def on_deactivated(self):
-        """
-            Emptys the process list, when Keypirinha Box is closed
+        """Emptys the process list and frees the icon handles, when Keypirinha Box is closed
         """
         self._processes_with_window = {}
         self._processes = []
 
-        # for ico in self._icons.values():
-        #     ico.free()
-        # self._icons = {}
+        for ico in self._icons.values():
+            ico.free()
+        self._icons = {}
 
     def on_suggest(self, user_input, items_chain):
-        """
-            Sets the list of running processes as suggestions
+        """Sets the list of running processes as suggestions
         """
         if not items_chain:
             return
@@ -379,8 +373,7 @@ class Kill(kp.Plugin):
         self.set_suggestions(self._processes, kp.Match.FUZZY, kp.Sort.SCORE_DESC)
 
     def on_execute(self, item, action):
-        """
-            Executes the selected (or default) kill action on the selected item
+        """Executes the selected (or default) kill action on the selected item
         """
         # get default action if no action was explicitly selected
         if action is None:
@@ -394,8 +387,7 @@ class Kill(kp.Plugin):
             self._kill_process_normal(item, action.name())
 
     def _kill_process_normal(self, target_item, action_name):
-        """
-            Kills the selected process(es) using the windows api
+        """Kills the selected process(es) using the windows api
         """
         target_name, target_pid = target_item.target().split("|")
         if "kill_by_name" in action_name:
@@ -433,47 +425,48 @@ class Kill(kp.Plugin):
             pid = int(target_pid)
             proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
             if not proc_handle:
-                self.warn("OpenProcess failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                self.warn("OpenProcess failed, ErrorCode: {}", KERNEL.GetLastError())
                 return
             success = KERNEL.TerminateProcess(proc_handle, 1)
             if not success:
-                self.warn("TerminateProcess failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
                 return
 
             self.dbg("Waiting for exit")
-            result = KERNEL.WaitForSingleObject(proc_handle, ct.wintypes.DWORD(3000))
+            timeout = ct.wintypes.DWORD(10000)
+            result = KERNEL.WaitForSingleObject(proc_handle, timeout)
             if result == WAIT_FAILED:
-                self.warn("WaitForSingleObject failed, ErrorCode: {}".format(KERNEL.GetLastError()))
+                self.warn("WaitForSingleObject failed, ErrorCode:", KERNEL.GetLastError())
                 return
             if result == WAIT_TIMEOUT:
                 self.warn("WaitForSingleObject timed out.")
                 return
             if result != WAIT_OBJECT_0:
-                self.warn("Something weird happened in WaitForSingleObject: {}".format(result))
+                self.warn("Something weird happened in WaitForSingleObject:", result)
                 return
 
             databag = eval(target_item.data_bag())
-            self.dbg(databag)
+            self.dbg("databag for process: ", databag)
             if "CommandLine" not in databag:
-                self.dbg("No commandline, cannot restart")
+                self.warn("No commandline, cannot restart")
                 return
+
             cmd = ct.wintypes.LPCWSTR(databag["CommandLine"])
             argc = ct.c_int(0)
             argv = CommandLineToArgvW(cmd, ct.byref(argc))
             if argc.value <= 0:
                 self.dbg("No args parsed")
                 return
+
             args = [argv[i] for i in range(0, argc.value)]
-            self.dbg(args)
+            self.dbg("CommandLine args from CommandLineToArgvW:", args)
             if args[0] == '' or args[0].isspace():
                 args[0] = databag["ExecutablePath"]
-            self.dbg(args)
+            self.dbg("Restarting:", args)
             kpu.shell_execute(args[0], args[1:])
 
     def _kill_process_admin(self, target_item, action_name):
-        """
-            Kills the selected process(es) using a call to windows' taskkill.exe
-            with elevated rights
+        """Kills the selected process(es) using a call to windows' taskkill.exe  with elevated rights
         """
         target_name, target_pid = target_item.target().split("|")
         args = ["taskkill", "/F"]
@@ -488,7 +481,5 @@ class Kill(kp.Plugin):
             # process id
             args.append(target_pid)
 
-        self.dbg("Calling: {}".format(args))
-
-        # show no window when executing
+        self.dbg("Calling: ", args)
         kpu.shell_execute(args[0], args[1:], verb="runas", show=subprocess.SW_HIDE)
