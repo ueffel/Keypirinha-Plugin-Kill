@@ -1,9 +1,10 @@
+from .lib.alttab import AltTab
 import keypirinha as kp
 import keypirinha_util as kpu
 import subprocess
 import ctypes as ct
 import time
-from .lib.alttab import AltTab
+import traceback
 
 try:
     import comtypes.client as com_cl
@@ -11,24 +12,29 @@ except ImportError:
     com_cl = None
 
 KERNEL = ct.windll.kernel32
-
-PROCESS_TERMINATE = 0x0001
-SYNCHRONIZE = 0x00100000
-
-RESTARTABLE = kp.ItemCategory.USER_BASE + 1
-
 CommandLineToArgvW = ct.windll.shell32.CommandLineToArgvW
 CommandLineToArgvW.argtypes = [ct.wintypes.LPCWSTR, ct.POINTER(ct.c_int)]
 CommandLineToArgvW.restype = ct.POINTER(ct.wintypes.LPWSTR)
 
+PROCESS_TERMINATE = 0x0001
+SYNCHRONIZE = 0x00100000
 WAIT_ABANDONED = 0x00000080
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
+RESTARTABLE = kp.ItemCategory.USER_BASE + 1
+
 
 class Kill(kp.Plugin):
     """Plugin that lists running processes with name and commandline (if available) and kills the selected process(es)
     """
+    ACTION_KILL_BY_ID = "kill_by_id"
+    ACTION_KILL_BY_NAME = "kill_by_name"
+    ACTION_KILL_RESTART_BY_ID = "kill_and_restart_by_id"
+    ADMIN_SUFFIX = "_admin"
+    ACTION_KILL_BY_ID_ADMIN = ACTION_KILL_BY_ID + ADMIN_SUFFIX
+    ACTION_KILL_BY_NAME_ADMIN = ACTION_KILL_BY_NAME + ADMIN_SUFFIX
+    DEFAULT_ITEM_LABEL = "Kill:"
 
     def __init__(self):
         """Default constructor and initializing internal attributes
@@ -38,9 +44,10 @@ class Kill(kp.Plugin):
         self._processes_with_window = {}
         self._actions = []
         self._icons = {}
-        self._default_action = "kill_by_id"
+        self._default_action = self.ACTION_KILL_BY_ID
         self._hide_background = False
         self._default_icon = None
+        self._item_label = self.DEFAULT_ITEM_LABEL
         self._debug = False
 
     def on_events(self, flags):
@@ -52,13 +59,14 @@ class Kill(kp.Plugin):
     def _read_config(self):
         """Reads the default action from the config
         """
+        self.dbg("Reading config")
         settings = self.load_settings()
 
         possible_actions = [
-            "kill_by_name",
-            "kill_by_id",
-            "kill_by_name_admin",
-            "kill_by_id_admin"
+            self.ACTION_KILL_BY_NAME,
+            self.ACTION_KILL_BY_ID,
+            self.ACTION_KILL_BY_NAME_ADMIN,
+            self.ACTION_KILL_BY_ID_ADMIN
         ]
 
         self._default_action = settings.get_enum(
@@ -67,29 +75,35 @@ class Kill(kp.Plugin):
             self._default_action,
             possible_actions
         )
+        self.dbg("default_action =", self._default_action)
 
         self._hide_background = settings.get_bool("hide_background", "main", False)
+        self.dbg("hide_background =", self._hide_background)
+
+        self._item_label = settings.get("item_label", "main", self.DEFAULT_ITEM_LABEL)
+        self.dbg("item_label =", self._item_label)
 
     def on_start(self):
-        """Creates the actions for killing the processes and register them
+        """Reads the config, creates the actions for killing the processes and register them
         """
         self._read_config()
+
         kill_by_name = self.create_action(
-            name="kill_by_name",
+            name=self.ACTION_KILL_BY_NAME,
             label="Kill by Name",
             short_desc="Kills all processes by that name"
         )
         self._actions.append(kill_by_name)
 
         kill_by_id = self.create_action(
-            name="kill_by_id",
+            name=self.ACTION_KILL_BY_ID,
             label="Kill by PID",
             short_desc="Kills single process by its process id"
         )
         self._actions.append(kill_by_id)
 
         kill_by_name_admin = self.create_action(
-            name="kill_by_name_admin",
+            name=self.ACTION_KILL_BY_NAME_ADMIN,
             label="Kill by Name (as Admin)",
             short_desc="Kills all processes by that name"
             + " with elevated rights (taskkill /F /IM <exe>)"
@@ -97,7 +111,7 @@ class Kill(kp.Plugin):
         self._actions.append(kill_by_name_admin)
 
         kill_by_id_admin = self.create_action(
-            name="kill_by_id_admin",
+            name=self.ACTION_KILL_BY_ID_ADMIN,
             label="Kill by PID (as Admin)",
             short_desc="Kills single process by its process id"
             + " with elevated rights (taskkill /F /PID <pid>)"
@@ -107,7 +121,7 @@ class Kill(kp.Plugin):
         self.set_actions(kp.ItemCategory.KEYWORD, self._actions)
 
         kill_and_restart_by_id = self.create_action(
-            name="kill_and_restart_by_id",
+            name=self.ACTION_KILL_RESTART_BY_ID,
             label="Kill by PID and restart application",
             short_desc="Kills single process by its process id"
             + " and tries to restart it"
@@ -117,7 +131,6 @@ class Kill(kp.Plugin):
         self.set_actions(RESTARTABLE, self._actions)
 
         self._default_icon = self.load_icon("res://{}/kill.ico".format(self.package_full_name()))
-        self.dbg(self._default_icon)
 
     def on_catalog(self):
         """Adds the kill command to the catalog
@@ -125,7 +138,7 @@ class Kill(kp.Plugin):
         catalog = []
         killcmd = self.create_item(
             category=kp.ItemCategory.KEYWORD,
-            label="Kill:",
+            label=self._item_label,
             short_desc="Kills running processes",
             target="kill",
             args_hint=kp.ItemArgsHint.REQUIRED,
@@ -147,7 +160,7 @@ class Kill(kp.Plugin):
                 icon = self.load_icon("@{},0".format(source))
                 self._icons[source] = icon
             except ValueError:
-                self.dbg("Icon loading failed :( ", source)
+                self.dbg("Icon loading failed :(", source)
                 icon = None
             if not icon:
                 return self._default_icon
@@ -179,7 +192,7 @@ class Kill(kp.Plugin):
         try:
             handles = AltTab.list_alttab_windows()
         except OSError:
-            self.err("Failed to list windows.", str(exc))
+            self.err("Failed to list windows.", traceback.format_exc())
 
         self._processes_with_window = {}
 
@@ -381,7 +394,7 @@ class Kill(kp.Plugin):
                 if act.name() == self._default_action:
                     action = act
 
-        if "_admin" in action.name():
+        if action.name().endswith(self.ADMIN_SUFFIX):
             self._kill_process_admin(item, action.name())
         else:
             self._kill_process_normal(item, action.name())
@@ -390,7 +403,7 @@ class Kill(kp.Plugin):
         """Kills the selected process(es) using the windows api
         """
         target_name, target_pid = target_item.target().split("|")
-        if "kill_by_name" in action_name:
+        if action_name.startswith(self.ACTION_KILL_BY_NAME):
             # loop over all processes and kill all by the same name
             for process_item in self._processes:
                 pname, pid = process_item.target().split("|")
@@ -399,33 +412,31 @@ class Kill(kp.Plugin):
                     self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
                     proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
                     if not proc_handle:
-                        self.warn("OpenProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                        self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
                         continue
                     success = KERNEL.TerminateProcess(proc_handle, 1)
                     if not success:
-                        self.warn("TerminateProcess failed, ErrorCode: "
-                                  + str(KERNEL.GetLastError()))
+                        self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
                         continue
-
-        elif "kill_by_id" in action_name:
+        elif action_name.startswith(self.ACTION_KILL_BY_ID):
             # kill process with that pid
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
             proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
             if not proc_handle:
-                self.warn("OpenProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
                 return
             success = KERNEL.TerminateProcess(proc_handle, 1)
             if not success:
-                self.warn("TerminateProcess failed, ErrorCode: " + str(KERNEL.GetLastError()))
+                self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
                 return
-        elif "kill_and_restart_by_id":
+        elif self.ACTION_KILL_RESTART_BY_ID:
             # kill process with that pid and try to restart it
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
             proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
             if not proc_handle:
-                self.warn("OpenProcess failed, ErrorCode: {}", KERNEL.GetLastError())
+                self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
                 return
             success = KERNEL.TerminateProcess(proc_handle, 1)
             if not success:
@@ -472,14 +483,14 @@ class Kill(kp.Plugin):
         args = ["taskkill", "/F"]
 
         # add parameters according to action
-        if "kill_by_name" in action_name:
+        if action_name.startswith(self.ACTION_KILL_BY_NAME):
             args.append("/IM")
             # process name
             args.append(target_name)
-        elif "kill_by_id" in action_name:
+        elif action_name.startswith(self.ACTION_KILL_BY_ID):
             args.append("/PID")
             # process id
             args.append(target_pid)
 
-        self.dbg("Calling: ", args)
+        self.dbg("Calling:", args)
         kpu.shell_execute(args[0], args[1:], verb="runas", show=subprocess.SW_HIDE)
