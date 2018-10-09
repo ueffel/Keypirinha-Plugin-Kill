@@ -19,7 +19,7 @@ Install Package "Keypirinha-Plugin-Kill"
 
 ### Manually
 
-* Download the `Kill.keypirinha-package` from the [Release Notes](https://github.com/ueffel/Keypirinha-Plugin-Kill/releases/latest).
+* Download the `Kill.keypirinha-package` from the [releases](https://github.com/ueffel/Keypirinha-Plugin-Kill/releases/latest).
 * Copy the file into `%APPDATA%\Keypirinha\InstalledPackages` (installed mode) or
   `<Keypirinha_Home>\portable\Profile\InstalledPackages` (portable mode)
 
