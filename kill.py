@@ -48,7 +48,6 @@ class Kill(kp.Plugin):
         self._hide_background = False
         self._default_icon = None
         self._item_label = self.DEFAULT_ITEM_LABEL
-        self._debug = False
 
     def on_events(self, flags):
         """Reloads the package config when its changed
@@ -57,10 +56,12 @@ class Kill(kp.Plugin):
             self._read_config()
 
     def _read_config(self):
-        """Reads the default action from the config
+        """Reads the config
         """
         self.dbg("Reading config")
         settings = self.load_settings()
+
+        self._debug = settings.get_bool("debug", "main", False)
 
         possible_actions = [
             self.ACTION_KILL_BY_NAME,
@@ -209,9 +210,15 @@ class Kill(kp.Plugin):
         Uses Windows Management COMObject (WMI) to get the running processes
         """
         result_wmi = wmi.ExecQuery("SELECT ProcessId, Caption, Name, ExecutablePath, CommandLine "
-                                   + "FROM Win32_Process")
+                                   "FROM Win32_Process")
         for proc in result_wmi:
-            is_foreground = proc.Properties_["ProcessId"].Value in self._processes_with_window
+            pid = proc.Properties_["ProcessId"].Value
+            is_foreground = pid in self._processes_with_window
+            if is_foreground:
+                window_title = AltTab.get_window_text(self._processes_with_window[pid])
+            else:
+                window_title = ""
+
             if self._hide_background and not is_foreground:
                 continue
 
@@ -244,7 +251,7 @@ class Kill(kp.Plugin):
                 if is_foreground:
                     label = '{}: "{}" ({})'.format(
                         proc.Properties_["Caption"].Value,
-                        AltTab.get_window_text(self._processes_with_window[proc.Properties_["ProcessId"].Value]),
+                        window_title,
                         'foreground'
                     )
                 else:
@@ -252,7 +259,7 @@ class Kill(kp.Plugin):
             else:
                 label = '{}: "{}"'.format(
                     proc.Properties_["Caption"].Value,
-                    AltTab.get_window_text(self._processes_with_window[proc.Properties_["ProcessId"].Value])
+                    window_title
                 )
 
             item = self.create_item(
@@ -261,7 +268,7 @@ class Kill(kp.Plugin):
                 short_desc=short_desc,
                 target=proc.Properties_["Name"].Value + "|" + str(proc.Properties_["ProcessId"].Value),
                 icon_handle=self._get_icon(proc.Properties_["ExecutablePath"].Value),
-                args_hint=kp.ItemArgsHint.REQUIRED,
+                args_hint=kp.ItemArgsHint.FORBIDDEN,
                 hit_hint=kp.ItemHitHint.IGNORE,
                 data_bag=str(databag)
             )
@@ -471,7 +478,7 @@ class Kill(kp.Plugin):
 
             args = [argv[i] for i in range(0, argc.value)]
             self.dbg("CommandLine args from CommandLineToArgvW:", args)
-            if args[0] == '' or args[0].isspace():
+            if args[0] == "" or args[0].isspace():
                 args[0] = databag["ExecutablePath"]
             self.dbg("Restarting:", args)
             kpu.shell_execute(args[0], args[1:])
