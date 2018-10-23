@@ -16,12 +16,27 @@ CommandLineToArgvW = ct.windll.shell32.CommandLineToArgvW
 CommandLineToArgvW.argtypes = [ct.wintypes.LPCWSTR, ct.POINTER(ct.c_int)]
 CommandLineToArgvW.restype = ct.POINTER(ct.wintypes.LPWSTR)
 
+SendMessageW = ct.windll.user32.SendMessageW
+SendMessageW.argtypes = [ct.wintypes.HWND, ct.c_uint, ct.wintypes.WPARAM, ct.wintypes.LPARAM]
+SendMessageW.restype = ct.c_long
+SendMessageTimeoutW = ct.windll.user32.SendMessageTimeoutW
+SendMessageTimeoutW.argtypes = [ct.wintypes.HWND,
+                                ct.c_uint,
+                                ct.wintypes.WPARAM,
+                                ct.wintypes.LPARAM,
+                                ct.c_uint,
+                                ct.c_uint]
+SendMessageTimeoutW.restype = ct.c_long
+
 PROCESS_TERMINATE = 0x0001
 SYNCHRONIZE = 0x00100000
 WAIT_ABANDONED = 0x00000080
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
+WM_CLOSE = 0x0010
+WM_DESTROY = 0x0002
+SMTO_NORMAL = 0x0000
 RESTARTABLE = kp.ItemCategory.USER_BASE + 1
 
 
@@ -417,6 +432,21 @@ class Kill(kp.Plugin):
                 pid = int(pid)
                 if pname == target_name:
                     self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
+
+                    if pid in self._processes_with_window:
+                        self.dbg("Sending WM_CLOSE")
+                        hwnd = self._processes_with_window[pid]
+                        success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL),
+                                                      ct.c_uint(3000))
+                        if not success:
+                            self.dbg("ErrorCode:", KERNEL.GetLastError())
+                            self.dbg("Sending WM_DESTROY")
+                            success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
+                                                          ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
+                            self.dbg(KERNEL.GetLastError())
+                            if not success:
+                                self.dbg("ErrorCode:", KERNEL.GetLastError())
+
                     proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
                     if not proc_handle:
                         self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
@@ -429,6 +459,23 @@ class Kill(kp.Plugin):
             # kill process with that pid
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
+
+            if pid in self._processes_with_window:
+                self.dbg("Sending WM_CLOSE")
+                hwnd = self._processes_with_window[pid]
+                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL), ct.c_uint(3000))
+                if success:
+                    return
+                self.dbg("ErrorCode:", KERNEL.GetLastError())
+                self.dbg("Sending WM_DESTROY")
+                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
+                                              ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
+                self.dbg(KERNEL.GetLastError())
+                if success:
+                    return
+                self.dbg("ErrorCode:", KERNEL.GetLastError())
+
+            self.dbg("TerminateProcess!")
             proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
             if not proc_handle:
                 self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
@@ -445,13 +492,28 @@ class Kill(kp.Plugin):
             if not proc_handle:
                 self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
                 return
-            success = KERNEL.TerminateProcess(proc_handle, 1)
-            if not success:
-                self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
-                return
+
+            if pid in self._processes_with_window:
+                self.dbg("Sending WM_CLOSE")
+                hwnd = self._processes_with_window[pid]
+                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL), ct.c_uint(3000))
+                if not success:
+                    self.dbg("ErrorCode:", KERNEL.GetLastError())
+                    self.dbg("Sending WM_DESTROY")
+                    success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
+                                                  ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
+                    self.dbg(KERNEL.GetLastError())
+                    if not success:
+                        self.dbg("ErrorCode:", KERNEL.GetLastError())
+
+                    self.dbg("TerminateProcess!")
+                    success = KERNEL.TerminateProcess(proc_handle, 1)
+                    if not success:
+                        self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
+                        return
 
             self.dbg("Waiting for exit")
-            timeout = ct.wintypes.DWORD(10000)
+            timeout = ct.wintypes.DWORD(5000)
             result = KERNEL.WaitForSingleObject(proc_handle, timeout)
             if result == WAIT_FAILED:
                 self.warn("WaitForSingleObject failed, ErrorCode:", KERNEL.GetLastError())
