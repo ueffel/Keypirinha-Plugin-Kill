@@ -201,6 +201,7 @@ class Kill(kp.Plugin):
             handles = AltTab.list_alttab_windows()
         except OSError:
             self.err("Failed to list windows.", traceback.format_exc())
+            return
 
         self._processes_with_window = {}
 
@@ -309,6 +310,7 @@ class Kill(kp.Plugin):
             self.err(err)
 
         # Parsing process list from output
+        outstr = None
         for enc in ["cp437", "cp850", "cp1252", "utf8"]:
             try:
                 output = output.replace(b"\r\r", b"\r")
@@ -316,6 +318,10 @@ class Kill(kp.Plugin):
                 break
             except UnicodeDecodeError:
                 self.dbg(enc, "threw exception")
+
+        if not outstr:
+            self.warn("decoding of output failed")
+            return
 
         info = {}
         for line in outstr.splitlines():
@@ -416,6 +422,7 @@ class Kill(kp.Plugin):
             self.err(err)
 
         # Parsing process list from output
+        outstr = None
         for enc in ["cp437", "cp850", "cp1252", "utf8"]:
             try:
                 output = output.replace(b"\r\r", b"\r")
@@ -423,6 +430,10 @@ class Kill(kp.Plugin):
                 break
             except UnicodeDecodeError:
                 self.dbg(enc, "threw exception")
+
+        if not outstr:
+            self.warn("decoding of output failed")
+            return False
 
         running = "ProcessId={}".format(pid) in outstr.splitlines()
         self.dbg("(wmic) process with id ", pid, "running" if running else "not running")
