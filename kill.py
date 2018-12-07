@@ -12,31 +12,21 @@ except ImportError:
     com_cl = None
 
 KERNEL = ct.windll.kernel32
+
 CommandLineToArgvW = ct.windll.shell32.CommandLineToArgvW
 CommandLineToArgvW.argtypes = [ct.wintypes.LPCWSTR, ct.POINTER(ct.c_int)]
 CommandLineToArgvW.restype = ct.POINTER(ct.wintypes.LPWSTR)
 
-SendMessageW = ct.windll.user32.SendMessageW
-SendMessageW.argtypes = [ct.wintypes.HWND, ct.c_uint, ct.wintypes.WPARAM, ct.wintypes.LPARAM]
-SendMessageW.restype = ct.c_long
-SendMessageTimeoutW = ct.windll.user32.SendMessageTimeoutW
-SendMessageTimeoutW.argtypes = [ct.wintypes.HWND,
-                                ct.c_uint,
-                                ct.wintypes.WPARAM,
-                                ct.wintypes.LPARAM,
-                                ct.c_uint,
-                                ct.c_uint]
-SendMessageTimeoutW.restype = ct.c_long
+PostMessageW = ct.windll.user32.PostMessageW
+PostMessageW.argtypes = [ct.wintypes.HWND, ct.c_uint, ct.wintypes.WPARAM, ct.wintypes.LPARAM]
+PostMessageW.restype = ct.c_long
 
 PROCESS_TERMINATE = 0x0001
 SYNCHRONIZE = 0x00100000
-WAIT_ABANDONED = 0x00000080
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 WAIT_FAILED = 0xFFFFFFFF
 WM_CLOSE = 0x0010
-WM_DESTROY = 0x0002
-SMTO_NORMAL = 0x0000
 RESTARTABLE = kp.ItemCategory.USER_BASE + 1
 
 
@@ -63,6 +53,7 @@ class Kill(kp.Plugin):
         self._hide_background = False
         self._default_icon = None
         self._item_label = self.DEFAULT_ITEM_LABEL
+        self.__executing = False
 
     def on_events(self, flags):
         """Reloads the package config when its changed
@@ -205,6 +196,7 @@ class Kill(kp.Plugin):
     def _get_windows(self):
         """Gets the list of open windows create a mapping between pid and hwnd
         """
+        self.dbg("Getting windows")
         try:
             handles = AltTab.list_alttab_windows()
         except OSError:
@@ -215,9 +207,13 @@ class Kill(kp.Plugin):
         for hwnd in handles:
             try:
                 _, proc_id = AltTab.get_window_thread_process_id(hwnd)
-                self._processes_with_window[proc_id] = hwnd
+                if proc_id in self._processes_with_window:
+                    self._processes_with_window[proc_id].append(hwnd)
+                else:
+                    self._processes_with_window[proc_id] = [hwnd]
             except OSError:
                 continue
+        self.dbg(len(self._processes_with_window), "windows found")
 
     def _get_processes_from_com_object(self, wmi):
         """Creates the list of running processes
@@ -230,7 +226,7 @@ class Kill(kp.Plugin):
             pid = proc.Properties_["ProcessId"].Value
             is_foreground = pid in self._processes_with_window
             if is_foreground:
-                window_title = AltTab.get_window_text(self._processes_with_window[pid])
+                window_title = AltTab.get_window_text(self._processes_with_window[pid][0])
             else:
                 window_title = ""
 
@@ -367,7 +363,7 @@ class Kill(kp.Plugin):
                         short_desc=short_desc,
                         target=info["Name"] + "|" + info["ProcessId"],
                         icon_handle=self._get_icon(info["ExecutablePath"]),
-                        args_hint=kp.ItemArgsHint.REQUIRED,
+                        args_hint=kp.ItemArgsHint.FORBIDDEN,
                         hit_hint=kp.ItemHitHint.IGNORE,
                         data_bag=str(databag)
                     )
@@ -379,13 +375,69 @@ class Kill(kp.Plugin):
                 label = line_splitted[0]
                 value = "=".join(line_splitted[1:])
                 # Skip system processes that cant be killed
-                if label == "Caption" and (value == "System Idle Process" or value == "System"):
+                if label == "Caption" and value in ("System Idle Process", "System"):
                     continue
                 info[label] = value
 
+    def _is_running(self, pid):
+        wmi = None
+        if com_cl:
+            wmi = com_cl.CoGetObject("winmgmts:")
+
+        if wmi:
+            return self._is_running_from_com_object(wmi, pid)
+        else:
+            return self._is_running_from_ext_call(pid)
+
+    def _is_running_from_com_object(self, wmi, pid):
+        result_wmi = wmi.ExecQuery("SELECT ProcessId, Caption, Name, ExecutablePath, CommandLine "
+                                   "FROM Win32_Process "
+                                   "WHERE ProcessId = {}".format(pid))
+        running = len(result_wmi) > 0
+        self.dbg("(wmi) process with id ", pid, "running" if running else "not running")
+        return running
+
+    def _is_running_from_ext_call(self, pid):
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        output, err = subprocess.Popen(["wmic",
+                                        "process",
+                                        "where",
+                                        "ProcessId={}".format(pid),
+                                        "get",
+                                        "ProcessId",
+                                        "/FORMAT:LIST"],
+                                       stdout=subprocess.PIPE,
+                                       # universal_newlines=True,
+                                       shell=False,
+                                       startupinfo=startupinfo).communicate()
+        # log error if any
+        if err:
+            self.err(err)
+
+        # Parsing process list from output
+        for enc in ["cp437", "cp850", "cp1252", "utf8"]:
+            try:
+                output = output.replace(b"\r\r", b"\r")
+                outstr = output.decode(enc)
+                break
+            except UnicodeDecodeError:
+                self.dbg(enc, "threw exception")
+
+        running = "ProcessId={}".format(pid) in outstr.splitlines()
+        self.dbg("(wmic) process with id ", pid, "running" if running else "not running")
+        return running
+
     def on_deactivated(self):
-        """Emptys the process list and frees the icon handles, when Keypirinha Box is closed
+        """Cleans up, when Keypirinha Box is closed
         """
+        if not self.__executing:
+            self._cleanup()
+
+    def _cleanup(self):
+        """Empties the process list, window list and frees the icon handles
+        """
+        self.dbg("Cleaning up")
         self._processes_with_window = {}
         self._processes = []
 
@@ -410,16 +462,21 @@ class Kill(kp.Plugin):
     def on_execute(self, item, action):
         """Executes the selected (or default) kill action on the selected item
         """
-        # get default action if no action was explicitly selected
-        if action is None:
-            for act in self._actions:
-                if act.name() == self._default_action:
-                    action = act
+        self.__executing = True
+        try:
+            # get default action if no action was explicitly selected
+            if action is None:
+                for act in self._actions:
+                    if act.name() == self._default_action:
+                        action = act
 
-        if action.name().endswith(self.ADMIN_SUFFIX):
-            self._kill_process_admin(item, action.name())
-        else:
-            self._kill_process_normal(item, action.name())
+            if action.name().endswith(self.ADMIN_SUFFIX):
+                self._kill_process_admin(item, action.name())
+            else:
+                self._kill_process_normal(item, action.name())
+        finally:
+            self._cleanup()
+            self.__executing = False
 
     def _kill_process_normal(self, target_item, action_name):
         """Kills the selected process(es) using the windows api
@@ -432,99 +489,22 @@ class Kill(kp.Plugin):
                 pid = int(pid)
                 if pname == target_name:
                     self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
-
-                    if pid in self._processes_with_window:
-                        self.dbg("Sending WM_CLOSE")
-                        hwnd = self._processes_with_window[pid]
-                        success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL),
-                                                      ct.c_uint(3000))
-                        if not success:
-                            self.dbg("ErrorCode:", KERNEL.GetLastError())
-                            self.dbg("Sending WM_DESTROY")
-                            success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
-                                                          ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
-                            self.dbg(KERNEL.GetLastError())
-                            if not success:
-                                self.dbg("ErrorCode:", KERNEL.GetLastError())
-
-                    proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
-                    if not proc_handle:
-                        self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
-                        continue
-                    success = KERNEL.TerminateProcess(proc_handle, 1)
-                    if not success:
-                        self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
-                        continue
+                    if not self._kill_by_pid(pid):
+                        self.warn("Killing process with id", pid, "failed")
         elif action_name.startswith(self.ACTION_KILL_BY_ID):
             # kill process with that pid
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
-
-            if pid in self._processes_with_window:
-                self.dbg("Sending WM_CLOSE")
-                hwnd = self._processes_with_window[pid]
-                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL), ct.c_uint(3000))
-                if success:
-                    return
-                self.dbg("ErrorCode:", KERNEL.GetLastError())
-                self.dbg("Sending WM_DESTROY")
-                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
-                                              ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
-                self.dbg(KERNEL.GetLastError())
-                if success:
-                    return
-                self.dbg("ErrorCode:", KERNEL.GetLastError())
-
-            self.dbg("TerminateProcess!")
-            proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE, False, pid)
-            if not proc_handle:
-                self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
-                return
-            success = KERNEL.TerminateProcess(proc_handle, 1)
-            if not success:
-                self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
-                return
+            self._kill_by_pid(pid)
+            if not self._kill_by_pid(pid):
+                self.warn("Killing process with id", pid, "failed")
         elif self.ACTION_KILL_RESTART_BY_ID:
             # kill process with that pid and try to restart it
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
-            proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
-            if not proc_handle:
-                self.warn("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
+            if not self._kill_by_pid(pid, wait_for_exit=True):
+                self.warn("Killing process with id", pid, "failed. Not restarting")
                 return
-
-            if pid in self._processes_with_window:
-                self.dbg("Sending WM_CLOSE")
-                hwnd = self._processes_with_window[pid]
-                success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_CLOSE), 0, 0, ct.c_uint(SMTO_NORMAL), ct.c_uint(3000))
-                if not success:
-                    self.dbg("ErrorCode:", KERNEL.GetLastError())
-                    self.dbg("Sending WM_DESTROY")
-                    success = SendMessageTimeoutW(hwnd, ct.c_uint(WM_DESTROY), 0, 0,
-                                                  ct.c_uint(SMTO_NORMAL), ct.c_uint(1000))
-                    self.dbg(KERNEL.GetLastError())
-                    if not success:
-                        self.dbg("ErrorCode:", KERNEL.GetLastError())
-
-                    self.dbg("TerminateProcess!")
-                    success = KERNEL.TerminateProcess(proc_handle, 1)
-                    if not success:
-                        self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
-                        return
-
-            self.dbg("Waiting for exit")
-            timeout = ct.wintypes.DWORD(5000)
-            result = KERNEL.WaitForSingleObject(proc_handle, timeout)
-            if result == WAIT_FAILED:
-                self.warn("WaitForSingleObject failed, ErrorCode:", KERNEL.GetLastError())
-                return
-            if result == WAIT_TIMEOUT:
-                self.warn("WaitForSingleObject timed out.")
-                return
-            if result != WAIT_OBJECT_0:
-                self.warn("Something weird happened in WaitForSingleObject:", result)
-                return
-
             databag = eval(target_item.data_bag())
             self.dbg("databag for process: ", databag)
             if "CommandLine" not in databag:
@@ -544,6 +524,54 @@ class Kill(kp.Plugin):
                 args[0] = databag["ExecutablePath"]
             self.dbg("Restarting:", args)
             kpu.shell_execute(args[0], args[1:])
+
+    def _kill_by_pid(self, pid, wait_for_exit=False):
+        proc_handle = KERNEL.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
+        if not proc_handle:
+            self.dbg("OpenProcess failed, ErrorCode:", KERNEL.GetLastError())
+            return False
+
+        if pid in self._processes_with_window:
+            self.dbg("Posting WM_CLOSE to", len(self._processes_with_window[pid]), "windows")
+            for hwnd in self._processes_with_window[pid]:
+                success = PostMessageW(hwnd, ct.c_uint(WM_CLOSE), 0, 0)
+                self.dbg("PostMessageW return:", success)
+
+            self.dbg("Waiting for exit")
+            timeout = ct.wintypes.DWORD(5000)
+            result = KERNEL.WaitForSingleObject(proc_handle, timeout)
+            if result == WAIT_OBJECT_0:
+                self.dbg("process exited clean.")
+                return True
+            if result == WAIT_TIMEOUT:
+                self.dbg("WaitForSingleObject timed out.")
+            else:
+                self.warn("Something weird happened in WaitForSingleObject:", result)
+            self.dbg("ErrorCode:", KERNEL.GetLastError())
+            if not self._is_running(pid):
+                return True
+
+        self.dbg("TerminateProcess!")
+        success = KERNEL.TerminateProcess(proc_handle, 1)
+        if not success:
+            self.warn("TerminateProcess failed, ErrorCode:", KERNEL.GetLastError())
+            return False
+
+        if wait_for_exit:
+            self.dbg("Waiting for exit")
+            timeout = ct.wintypes.DWORD(1000)
+            result = KERNEL.WaitForSingleObject(proc_handle, timeout)
+            if result == WAIT_FAILED:
+                self.warn("WaitForSingleObject failed, ErrorCode:", KERNEL.GetLastError())
+                return False
+            if result == WAIT_TIMEOUT:
+                self.warn("WaitForSingleObject timed out.")
+                return False
+            if result != WAIT_OBJECT_0:
+                self.warn("Something weird happened in WaitForSingleObject:", result)
+                return False
+
+        return True
 
     def _kill_process_admin(self, target_item, action_name):
         """Kills the selected process(es) using a call to windows' taskkill.exe  with elevated rights
