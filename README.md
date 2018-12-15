@@ -11,6 +11,8 @@ Tab, you are present with a list of running processes where you can choose a pro
 
 There some alternative actions, if you hit Ctrl+Enter which should be self-explaining.
 
+![Usage](usage.gif)
+
 ## Installation
 
 ### With [PackageControl](https://github.com/ueffel/Keypirinha-PackageControl)
