@@ -5,6 +5,7 @@ import subprocess
 import ctypes as ct
 import time
 import traceback
+import asyncio
 
 try:
     import comtypes.client as com_cl
@@ -474,6 +475,7 @@ class Kill(kp.Plugin):
         """Executes the selected (or default) kill action on the selected item
         """
         self.__executing = True
+        loop = None
         try:
             # get default action if no action was explicitly selected
             if action is None:
@@ -481,39 +483,59 @@ class Kill(kp.Plugin):
                     if act.name() == self._default_action:
                         action = act
 
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             if action.name().endswith(self.ADMIN_SUFFIX):
                 self._kill_process_admin(item, action.name())
             else:
-                self._kill_process_normal(item, action.name())
+                killing_task = asyncio.ensure_future(self._kill_process_normal(item, action.name()))
+                loop.run_until_complete(killing_task)
         finally:
             self._cleanup()
             self.__executing = False
+            if loop:
+                loop.close()
 
-    def _kill_process_normal(self, target_item, action_name):
+    async def _kill_process_normal(self, target_item, action_name):
         """Kills the selected process(es) using the windows api
         """
         target_name, target_pid = target_item.target().split("|")
         if action_name.startswith(self.ACTION_KILL_BY_NAME):
             # loop over all processes and kill all by the same name
+            kill_tasks = {}
             for process_item in self._processes:
                 pname, pid = process_item.target().split("|")
                 pid = int(pid)
                 if pname == target_name:
                     self.dbg("Killing process with id: {} and name: {}".format(pid, pname))
-                    if not self._kill_by_pid(pid):
-                        self.warn("Killing process with id", pid, "failed")
+                    kill_tasks[pid] = asyncio.get_event_loop().run_in_executor(None, self._kill_by_pid, pid)
+            await asyncio.gather(*kill_tasks.values(), return_exceptions=True)
+
+            self.dbg("Kill tasks finished")
+            for pid, kill_task in kill_tasks.items():
+                exc = kill_task.exception()
+                if exc:
+                    self.err(exc)
+                    self.dbg(traceback.format_exception(exc.__class__, exc, exc.__traceback__))
+                    continue
+                result = kill_task.result()
+                if not result:
+                    self.warn("Killing process with pid", pid, "failed")
+
         elif action_name.startswith(self.ACTION_KILL_BY_ID):
             # kill process with that pid
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
-            self._kill_by_pid(pid)
-            if not self._kill_by_pid(pid):
+            killed = await asyncio.get_event_loop().run_in_executor(None, self._kill_by_pid, pid)
+            if not killed:
                 self.warn("Killing process with id", pid, "failed")
         elif self.ACTION_KILL_RESTART_BY_ID:
             # kill process with that pid and try to restart it
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
-            if not self._kill_by_pid(pid, wait_for_exit=True):
+            killed = await asyncio.get_event_loop().run_in_executor(None,
+                                                                    lambda: self._kill_by_pid(pid, wait_for_exit=True))
+            if not killed:
                 self.warn("Killing process with id", pid, "failed. Not restarting")
                 return
             databag = eval(target_item.data_bag())
