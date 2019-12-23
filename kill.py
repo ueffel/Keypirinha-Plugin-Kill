@@ -450,12 +450,26 @@ class Kill(kp.Plugin):
         """Empties the process list, window list and frees the icon handles
         """
         self.dbg("Cleaning up")
+        if self._processes:
+            # Discard some icon handles that are not needed anymore
+            icons_to_free = {}
+            for icon, handle in self._icons.items():
+                found = False
+                for process in self._processes:
+                    databag = eval(process.data_bag())
+                    if "ExecutablePath" in databag and icon == databag["ExecutablePath"]:
+                        found = True
+                        break
+                if not found:
+                    icons_to_free[icon] = handle
+
+            self.dbg("Freeing ", len(icons_to_free), "unused icon handles")
+            for icon, handle in icons_to_free.items():
+                del self._icons[icon]
+                handle.free()
+
         self._processes_with_window = {}
         self._processes = []
-
-        for ico in self._icons.values():
-            ico.free()
-        self._icons = {}
 
     def on_suggest(self, user_input, items_chain):
         """Sets the list of running processes as suggestions
@@ -519,7 +533,12 @@ class Kill(kp.Plugin):
                     self.dbg(traceback.format_exception(exc.__class__, exc, exc.__traceback__))
                     continue
                 result = kill_task.result()
-                if not result:
+                if result:
+                    process = next((p for p in self._processes if int(p.target().split("|")[1]) == pid), None)
+                    if process:
+                        self.dbg("removing from list:", process)
+                        self._processes.remove(process)
+                else:
                     self.warn("Killing process with pid", pid, "failed")
 
         elif action_name.startswith(self.ACTION_KILL_BY_ID):
@@ -527,7 +546,12 @@ class Kill(kp.Plugin):
             self.dbg("Killing process with id: {} and name: {}".format(target_pid, target_name))
             pid = int(target_pid)
             killed = await asyncio.get_event_loop().run_in_executor(None, self._kill_by_pid, pid)
-            if not killed:
+            if killed:
+                process = next((p for p in self._processes if int(p.target().split("|")[1]) == pid), None)
+                if process:
+                    self.dbg("removing from list:", process)
+                    self._processes.remove(process)
+            else:
                 self.warn("Killing process with id", pid, "failed")
         elif self.ACTION_KILL_RESTART_BY_ID:
             # kill process with that pid and try to restart it
@@ -580,6 +604,24 @@ class Kill(kp.Plugin):
                 self.dbg("WaitForSingleObject timed out.")
             else:
                 self.warn("Something weird happened in WaitForSingleObject:", result)
+            self.dbg("ErrorCode:", KERNEL.GetLastError())
+            if not self._is_running(pid):
+                return True
+
+        self.dbg("Calling ExitProcess in Remote Thread")
+        thread = KERNEL.CreateRemoteThread(proc_handle, None, 0, KERNEL.ExitProcess, ct.c_uint(1), 0)
+        if thread:
+            self.dbg("Waiting for exit")
+            timeout = ct.wintypes.DWORD(5000)
+            result = KERNEL.WaitForSingleObject(proc_handle, timeout)
+            if result == WAIT_OBJECT_0:
+                self.dbg("process exited clean.")
+                return True
+            if result == WAIT_TIMEOUT:
+                self.dbg("WaitForSingleObject timed out.")
+            else:
+                self.warn(
+                    "Something weird happened in WaitForSingleObject:", result)
             self.dbg("ErrorCode:", KERNEL.GetLastError())
             if not self._is_running(pid):
                 return True
