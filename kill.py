@@ -40,6 +40,8 @@ class Kill(kp.Plugin):
     ADMIN_SUFFIX = "_admin"
     ACTION_KILL_BY_ID_ADMIN = ACTION_KILL_BY_ID + ADMIN_SUFFIX
     ACTION_KILL_BY_NAME_ADMIN = ACTION_KILL_BY_NAME + ADMIN_SUFFIX
+    ACTION_COPY_CMD_LINE = "copy_cmd_line"
+    ACTION_COPY_IMAGE_PATH = "copy_image_path"
     DEFAULT_ITEM_LABEL = "Kill:"
 
     def __init__(self):
@@ -126,6 +128,13 @@ class Kill(kp.Plugin):
         )
         self._actions.append(kill_by_id_admin)
 
+        copy_image_path = self.create_action(
+            name=self.ACTION_COPY_IMAGE_PATH,
+            label="Copy the path of the executeable to clipboard",
+            short_desc="Copies the absolute path of the executable of this process to the clipboard"
+        )
+        self._actions.append(copy_image_path)
+
         self.set_actions(kp.ItemCategory.KEYWORD, self._actions)
 
         kill_and_restart_by_id = self.create_action(
@@ -134,8 +143,16 @@ class Kill(kp.Plugin):
             short_desc="Kills single process by its process id"
             + " and tries to restart it"
         )
-
         self._actions.append(kill_and_restart_by_id)
+
+        copy_image_path = self.create_action(
+            name=self.ACTION_COPY_CMD_LINE,
+            label="Copy the command line of the process to clipboard",
+            short_desc="Copys the command line that started this process to the clipboard"
+            + " and tries to restart it"
+        )
+        self._actions.append(copy_image_path)
+
         self.set_actions(RESTARTABLE, self._actions)
 
         self._default_icon = self.load_icon("res://{}/kill.ico".format(self.package_full_name()))
@@ -496,6 +513,23 @@ class Kill(kp.Plugin):
                 for act in self._actions:
                     if act.name() == self._default_action:
                         action = act
+
+            if action.name() == self.ACTION_COPY_CMD_LINE:
+                databag = eval(item.data_bag())
+                self.dbg(databag)
+                if "CommandLine" in databag:
+                    kpu.set_clipboard(databag["CommandLine"])
+                else:
+                    self.err("CommandLine could not be obtained")
+                return
+            elif action.name() == self.ACTION_COPY_IMAGE_PATH:
+                databag = eval(item.data_bag())
+                self.dbg(databag)
+                if "ExecutablePath" in databag:
+                    kpu.set_clipboard(databag["ExecutablePath"])
+                else:
+                    self.err("ExecutablePath could not be obtained")
+                return
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
