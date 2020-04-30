@@ -1,8 +1,7 @@
-Keypirinha Plugin Kill
-=======================
+# Keypirinha Plugin Kill
 
-This is a package that extends the fast keystroke launcher keypirinha (http://keypirinha.com/) with
-a command to kill a running processes.
+This is a package that extends the fast keystroke launcher keypirinha (<http://keypirinha.com/>)
+with a command to kill a running processes.
 
 ## Usage
 
