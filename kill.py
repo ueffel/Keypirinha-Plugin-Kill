@@ -500,7 +500,12 @@ class Kill(kp.Plugin):
         if not self._processes:
             self._get_processes()
 
-        self.set_suggestions(self._processes, kp.Match.FUZZY, kp.Sort.SCORE_DESC)
+        if user_input:
+            self.set_suggestions(self._processes, kp.Match.FUZZY, kp.Sort.SCORE_DESC)
+        else:
+            self.set_suggestions(sorted(self._processes, key=lambda p: (p.label().endswith("(background)"), p.label().lower())),
+                                 kp.Match.ANY,
+                                 kp.Sort.NONE)
 
     def on_execute(self, item, action):
         """Executes the selected (or default) kill action on the selected item
