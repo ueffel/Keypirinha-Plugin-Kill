@@ -176,6 +176,10 @@ class Kill(kp.Plugin):
         if not source:
             return self._default_icon
 
+        if self.should_terminate():
+            self.info("_get_icon should_terminate")
+            return self._default_icon
+
         if source in self._icons:
             return self._icons[source]
         else:
