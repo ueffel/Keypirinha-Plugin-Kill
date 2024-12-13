@@ -177,7 +177,7 @@ class Kill(kp.Plugin):
             return self._default_icon
 
         if self.should_terminate():
-            self.info("_get_icon should_terminate")
+            self.dbg("_get_icon should_terminate")
             return self._default_icon
 
         if source in self._icons:
@@ -186,8 +186,8 @@ class Kill(kp.Plugin):
             try:
                 icon = self.load_icon("@{},0".format(source))
                 self._icons[source] = icon
-            except ValueError:
-                self.dbg("Icon loading failed :(", source)
+            except ValueError as err:
+                self.warn("Icon loading failed :(", source, err)
                 icon = None
             if not icon:
                 return self._default_icon
